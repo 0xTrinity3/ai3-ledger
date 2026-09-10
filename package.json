@@ -1,0 +1,26 @@
+{
+  "name": "@ai3/ledger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI3 Ledger — accounting for agent organisations. Paperclip plugin; platform-agnostic core.",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.831.1",
+    "@paperclipai/shared": "2026.831.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}
