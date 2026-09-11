@@ -1,4 +1,5 @@
 import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
+import { TOOL_DECLARATIONS } from './plugin/tools.js';
 
 /**
  * Paperclip plugin manifest. Loaded by the host as a JS module (dist/manifest.js).
@@ -11,7 +12,7 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.8.0',
+  version: '0.9.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -27,6 +28,10 @@ const manifest: PaperclipPluginManifestV1 = {
     'ui.page.register',
     'ui.sidebar.register',
     'http.outbound',
+    'agent.tools.register',
+    'issues.read',
+    'issues.create',
+    'issues.update',
   ],
   entrypoints: {
     worker: 'dist/plugin/worker.js',
@@ -56,6 +61,12 @@ const manifest: PaperclipPluginManifestV1 = {
       description: 'Matches new statement lines to the books and posts everything above the confidence threshold; the rest wait for a person.',
       schedule: '15 3 * * *',
     },
+    {
+      jobKey: 'briefing',
+      displayName: 'Finance briefing',
+      description: 'Each morning, writes what needs attention (overdue and unsent invoices, unreconciled lines, short runway) as one task per company, updated in place.',
+      schedule: '0 8 * * *',
+    },
   ],
   apiRoutes: [
     { routeKey: 'position', method: 'GET', path: '/position', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
@@ -81,6 +92,9 @@ const manifest: PaperclipPluginManifestV1 = {
     { routeKey: 'reports.pnl', method: 'GET', path: '/reports/pnl', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'reports.balance-sheet', method: 'GET', path: '/reports/balance-sheet', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
   ],
+  // M6: what an agent in the company can do with the books. Exposed by the
+  // host through its tool gateway as ai3.ledger:<name>.
+  tools: TOOL_DECLARATIONS,
 };
 
 export default manifest;

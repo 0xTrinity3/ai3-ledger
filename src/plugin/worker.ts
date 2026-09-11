@@ -74,6 +74,8 @@ import {
 } from '../core/index.js';
 import { paperclipCostSource } from './cost-source.js';
 import { Ai3Error, hostedStatus, isConnected, publishInvoice, revokeInvoice, sendInvoice } from './ai3.js';
+import { TOOL_DECLARATIONS, runTool } from './tools.js';
+import { buildBriefing } from './briefing.js';
 
 const CURRENCY = 'USD';
 const SWEEP_JOB = 'sweep';
@@ -761,6 +763,56 @@ const plugin = definePlugin({
         }
       }
       context.logger.info('ledger: nightly reconcile done', { runId: job.runId, posted });
+    });
+
+    // M6: agent tools. The host validates params against the manifest schema
+    // and supplies the agent, run and company; the tool never trusts a
+    // company from the caller.
+    const nameOf = async (companyId: string): Promise<string> => {
+      if (!companyNames.has(companyId)) {
+        for (const c of await context.companies.list({ limit: 500 })) companyNames.set(c.id, c.name);
+      }
+      return companyNames.get(companyId) ?? 'Company';
+    };
+    for (const decl of TOOL_DECLARATIONS) {
+      context.tools.register(decl.name, { displayName: decl.displayName, description: decl.description, parametersSchema: decl.parametersSchema }, async (params, runCtx) => {
+        await seedAccounts(ledger(), runCtx.companyId, CURRENCY);
+        const started = Date.now();
+        const result = await runTool({ db: ledger(), fetch: httpFetch, companyName: nameOf, baseCurrency: CURRENCY }, decl.name, params, runCtx);
+        context.logger.info('ledger: tool', { tool: decl.name, agentId: runCtx.agentId, companyId: runCtx.companyId, ms: Date.now() - started, ...(result.error ? { error: result.error } : {}) });
+        return result;
+      });
+    }
+
+    // Each morning: one task per company with what needs attention, updated
+    // in place while it stays open. A quiet day writes nothing.
+    const BRIEFING_ORIGIN = 'plugin:ai3.ledger' as const;
+    context.jobs.register('briefing', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let written = 0;
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          await seedAccounts(ledger(), company.id, CURRENCY);
+          const b = await buildBriefing(ledger(), company.id);
+          if (!b) continue;
+          const existing = (await context.issues.list({ companyId: company.id, originKind: BRIEFING_ORIGIN, originId: 'finance-briefing', limit: 20 }))
+            .filter((i) => i.status !== 'done' && i.status !== 'cancelled');
+          if (existing[0]) {
+            await context.issues.update(existing[0].id, { title: b.title, description: b.body, priority: b.priority }, company.id);
+          } else {
+            await context.issues.create({ companyId: company.id, title: b.title, description: b.body, status: 'todo', priority: b.priority, originKind: BRIEFING_ORIGIN, originId: 'finance-briefing', originRunId: job.runId });
+          }
+          written += 1;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          failures.push(`${company.name}: ${message}`);
+          context.logger.error('ledger: briefing failed', { companyId: company.id, error: message });
+        }
+      }
+      context.logger.info('ledger: briefing done', { runId: job.runId, written, failed: failures.length });
+      // A failed company marks the run failed, so the job dashboard shows it.
+      if (failures.length > 0) throw new Error(`briefing not written for ${failures.length} company(ies): ${failures.join('; ')}`.slice(0, 1000));
     });
     context.logger.info('ledger: ready', { namespace: context.db.namespace });
   },
