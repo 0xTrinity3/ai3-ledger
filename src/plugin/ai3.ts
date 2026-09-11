@@ -7,6 +7,7 @@
  * from Paperclip's own tables.
  */
 import type { CompanySettings, Invoice } from '../core/index.js';
+import { DISPUTE_CLAUSE } from './recourse.js';
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -54,6 +55,7 @@ export function invoiceDocument(inv: Invoice, settings: CompanySettings, company
     notes: inv.notes,
     customer: { name: inv.customerName, email: inv.customerEmail },
     company: { name: settings.legalName || companyName, address: settings.address, email: settings.email, taxId: settings.taxId, footer: settings.invoiceFooter },
+    disputes: DISPUTE_CLAUSE,
   };
 }
 

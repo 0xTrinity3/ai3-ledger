@@ -70,6 +70,7 @@ describe('manifest', () => {
     expect(TOOL_DECLARATIONS.map((t) => t.name)).toEqual([
       'position', 'invoices', 'invoice', 'customers', 'create-invoice', 'send-invoice', 'record-payment', 'void-invoice', 'write-off-invoice',
       'bank-accounts', 'reconcile-queue', 'reconcile', 'reconcile-all', 'profit-and-loss', 'balance-sheet',
+      'wallet', 'pay-invoice', 'dispute-invoice', 'dispute', 'settle-dispute',
     ]);
   });
 });

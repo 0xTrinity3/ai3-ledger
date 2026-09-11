@@ -79,3 +79,6 @@ export type { RateQuote, FetchLike } from './rates.js';
 export { getRate, isCrypto, clearRateCache, RateError } from './rates.js';
 export { setInvoiceHosted, markInvoiceSent, markInvoiceOpened, markInvoiceReminded } from './invoices.js';
 export { REMINDER_DAYS, dueReminders, reminderEmail, type DueReminder } from './reminders.js';
+export type { CompanyWallet, Dispute, DisputeRole } from './wallets.js';
+export { getWallet, saveWallet, getChainCursor, setChainCursor, createDispute, updateDispute, listDisputes, getDispute } from './wallets.js';
+export { findTransactionBySourceRef } from './ledger.js';

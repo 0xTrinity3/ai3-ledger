@@ -68,6 +68,9 @@ import {
   markInvoiceReminded,
   dueReminders,
   reminderEmail,
+  getWallet,
+  listDisputes,
+  updateDispute,
   type PaymentKind,
   type Decision,
   type BankKind,
@@ -80,6 +83,8 @@ import { Ai3Error, hostedStatus, isConnected, publishInvoice, revokeInvoice, sen
 import { TOOL_DECLARATIONS, runTool } from './tools.js';
 import { LEDGER_SKILL_KEY } from './skill.js';
 import { buildBriefing } from './briefing.js';
+import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, requestFaucet, syncWalletFeed } from './tempo.js';
+import { getCase, type Ruling } from './recourse.js';
 
 const CURRENCY = 'USD';
 const SWEEP_JOB = 'sweep';
@@ -132,6 +137,13 @@ async function sweepAll(): Promise<void> {
   const companies = await c.companies.list({ limit: 500 });
   for (const company of companies) {
     await syncSkill(company.id);
+    try {
+      await seedAccounts(ledger(), company.id, CURRENCY);
+      const w = await ensureWallet(ledger(), company.id, CURRENCY);
+      if (w.created) c.logger.info('ledger: wallet created', { companyId: company.id, address: w.wallet.address, faucet: w.faucet?.ok ?? null });
+    } catch (err) {
+      c.logger.warn('ledger: wallet not ready', { companyId: company.id, error: err instanceof Error ? err.message : String(err) });
+    }
     try {
       const r = await sweepCompany(company.id);
       results.push(r);
@@ -890,6 +902,57 @@ const plugin = definePlugin({
       }
       context.logger.info('ledger: reminders done', { runId: job.runId, sent, failed: failures.length });
       if (failures.length > 0) throw new Error(`reminders not sent: ${failures.join('; ')}`.slice(0, 1000));
+    });
+    // Wallet and disputes for the page.
+    context.data.register('wallet', async (params) => {
+      const companyId = await companyOf(params);
+      const w = await getWallet(ledger(), companyId);
+      if (!w) return { wallet: null };
+      const balance = await balanceCents(w.address).catch(() => null);
+      return { wallet: { address: w.address, network: w.network, networkLabel: TEMPO_NETWORK_LABEL, asset: PATH_USD_SYMBOL, balanceMinor: balance === null ? null : balance.toString(), explorer: explorerAddress(w.address), bankAccountId: w.bankAccountId, createdAt: w.createdAt } };
+    });
+    context.data.register('disputes', async (params) => ({ disputes: await listDisputes(ledger(), await companyOf(params)) }));
+    context.actions.register('wallet.create', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const r = await ensureWallet(ledger(), companyId, CURRENCY);
+      return { address: r.wallet.address, created: r.created, faucet: r.faucet ?? null };
+    });
+    context.actions.register('wallet.faucet', async (params, ctx) => {
+      boardOnly(ctx);
+      const w = await getWallet(ledger(), await companyOf(params));
+      if (!w) throw new Error('No wallet yet');
+      return requestFaucet(w.address);
+    });
+    context.actions.register('wallet.sync', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      return (await syncWalletFeed(ledger(), companyId, { by: 'board', autoPost: params['autoPost'] !== false })) ?? { imported: 0 };
+    });
+    // Every five minutes: read the chain into each wallet's bank account and
+    // post what the matcher is sure of; refresh disputes still being decided.
+    context.jobs.register('chain-feed', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let imported = 0;
+      let posted = 0;
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          const r = await syncWalletFeed(ledger(), company.id, { by: 'chain-feed' });
+          if (r) { imported += r.imported; posted += r.autoPosted; }
+          for (const d of await listDisputes(ledger(), company.id)) {
+            if (!d.caseId || d.ruling || !(d.status === 'pending' || d.status === 'filed')) continue;
+            const rec = await getCase(httpFetch, d.caseId).catch(() => null);
+            if (!rec) continue;
+            const ruling = (rec.ruling ?? null) as Ruling | null;
+            if (ruling || (rec.status && rec.status !== d.status)) await updateDispute(ledger(), company.id, d.id, { status: ruling ? 'decided' : rec.status, ruling, instruction: rec.rail_instruction ?? d.instruction });
+          }
+        } catch (err) {
+          failures.push(`${company.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      context.logger.info('ledger: chain feed done', { runId: job.runId, imported, posted, failed: failures.length });
+      if (failures.length > 0) throw new Error(`chain feed: ${failures.join('; ')}`.slice(0, 1000));
     });
     // A fresh tenant should not wait for the next quarter hour: first sweep
     // (which also installs the company skill) shortly after boot.

@@ -1,6 +1,6 @@
 {
   "name": "@ai3/ledger",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "description": "AI3 Ledger \u2014 accounting for agent organisations. Paperclip plugin; platform-agnostic core.",
   "engines": {
@@ -15,7 +15,8 @@
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "2026.831.1",
-    "@paperclipai/shared": "2026.831.1"
+    "@paperclipai/shared": "2026.831.1",
+    "viem": "^2.56.3"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

@@ -449,6 +449,15 @@ export interface ListTransactionsOptions {
 }
 
 /** Posted transactions for a company, newest first, with their entries. */
+/** The posted transaction a platform reference points at, if any. Used to tie a chain line to the payment that caused it. */
+export async function findTransactionBySourceRef(db: LedgerDb, companyId: string, sourcePlatform: string, sourceRef: string): Promise<string | null> {
+  const rows = await db.sql.query<{ id: string }>(
+    `SELECT id FROM ${table(db, 'transactions')} WHERE company_id = $1 AND source_platform = $2 AND source_ref = $3 AND status = 'posted' ORDER BY created_at DESC LIMIT 1`,
+    [companyId, sourcePlatform, sourceRef],
+  );
+  return rows[0]?.id ?? null;
+}
+
 export async function listTransactions(db: LedgerDb, companyId: string, opts: ListTransactionsOptions = {}): Promise<TransactionRow[]> {
   const limit = Math.min(Math.max(Math.floor(opts.limit ?? 50), 1), 500);
   const heads = await db.sql.query<{

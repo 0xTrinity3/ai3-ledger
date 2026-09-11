@@ -1010,6 +1010,82 @@ function PaymentMethodForm({ companyId, onDone }: { companyId: string; onDone: (
   );
 }
 
+interface WalletInfo { address: string; network: string; networkLabel: string; asset: string; balanceMinor: string | null; explorer: string; bankAccountId: string | null; createdAt: string }
+
+function WalletCard({ companyId }: { companyId: string }) {
+  const data = usePluginData<{ wallet: WalletInfo | null }>('wallet', { companyId });
+  const create = usePluginAction('wallet.create');
+  const faucet = usePluginAction('wallet.faucet');
+  const sync = usePluginAction('wallet.sync');
+  const { run, busy } = useRun([data.refresh]);
+  const [copied, setCopied] = useState(false);
+  const w = data.data?.wallet ?? null;
+  return (
+    <div className="ai3-card" style={{ marginTop: 14 }}>
+      <div className="ai3-toolbar">
+        <h3 style={{ margin: 0 }}>Wallet <span className="ctx">stablecoins on Tempo, Stripe’s payments chain · testnet</span></h3>
+        {w ? <span className="ai3-badge paid">{w.networkLabel}</span> : null}
+      </div>
+      {!w ? (
+        <div className="ai3-actions">
+          <span className="ai3-note">No wallet yet. One is created automatically within minutes of the company starting; or create it now.</span>
+          <button className="ai3-btn primary" disabled={busy} onClick={() => run(() => create({ companyId }), 'Wallet created and funded from the testnet faucet')}>Create wallet</button>
+        </div>
+      ) : (
+        <>
+          <div className="ai3-grid two">
+            <div>
+              <div className="ai3-cap">Address</div>
+              <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, wordBreak: 'break-all' }}>{w.address}</div>
+              <div className="ai3-actions" style={{ marginTop: 6 }}>
+                <button className="ai3-btn small" onClick={() => { void navigator.clipboard?.writeText(w.address).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}>{copied ? 'Copied' : 'Copy'}</button>
+                <a className="ai3-btn small" href={w.explorer} target="_blank" rel="noreferrer">Explorer</a>
+              </div>
+            </div>
+            <div>
+              <div className="ai3-cap">Balance</div>
+              <div style={{ fontSize: 22, fontWeight: 600 }}>{w.balanceMinor === null ? '—' : `${fmt(w.balanceMinor, { symbol: false })} ${w.asset}`}</div>
+              <div className="ai3-actions" style={{ marginTop: 6 }}>
+                <button className="ai3-btn small" disabled={busy} onClick={() => run(() => faucet({ companyId }), 'Test money requested')}>Top up (faucet)</button>
+                <button className="ai3-btn small" disabled={busy} onClick={() => run(() => sync({ companyId }), 'Chain read into the books')}>Read chain now</button>
+              </div>
+            </div>
+          </div>
+          <p className="ai3-note">Printed on every invoice as a payment option; transfers in and out land in the bank account "Tempo wallet" and reconcile by invoice number in the memo. The key lives in this company’s database: test money only.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface DisputeRow { id: string; invoiceNumber: string | null; role: string; caseId: string | null; status: string; amountMinor: string; currency: string; claim: string; ruling: { summary?: string; fault_allocation?: { claimant_pct: number; respondent_pct: number }; money_instruction?: { type: string; to_respondent_minor: number; to_claimant_minor: number; currency: string } } | null; settledTx: string | null; filedAt: string }
+
+function DisputesList({ companyId }: { companyId: string }) {
+  const data = usePluginData<{ disputes: DisputeRow[] }>('disputes', { companyId });
+  const rows = data.data?.disputes ?? [];
+  if (rows.length === 0) return null;
+  return (
+    <div className="ai3-card" style={{ marginTop: 14 }}>
+      <h3>Disputes <span className="ctx">at Recourse, the venue every invoice names</span></h3>
+      <table className="ai3-table">
+        <thead><tr><th>Filed</th><th>Invoice</th><th>Side</th><th>Status</th><th className="num">Amount</th><th>Ruling</th></tr></thead>
+        <tbody>
+          {rows.map((d) => (
+            <tr key={d.id}>
+              <td className="muted">{dateLong(d.filedAt)}</td>
+              <td>{d.invoiceNumber ?? '—'}</td>
+              <td>{d.role}</td>
+              <td><span className={`ai3-badge ${d.status === 'decided' || d.status === 'settled' ? 'paid' : d.status === 'failed' ? 'void' : 'issued'}`}>{d.status}</span>{d.caseId ? <> · <a href={`https://recourse.so/disputes/${d.caseId}`} target="_blank" rel="noreferrer">case</a></> : null}</td>
+              <td className="num">{fmt(d.amountMinor, { symbol: false })} {d.currency}</td>
+              <td style={{ maxWidth: 420 }}>{d.ruling ? `${d.ruling.fault_allocation?.claimant_pct ?? '?'}% / ${d.ruling.fault_allocation?.respondent_pct ?? '?'}% fault · ${d.ruling.money_instruction?.type ?? ''} · ${d.ruling.summary ?? ''}` : d.claim}{d.settledTx ? <div className="ai3-cap">settled {d.settledTx.slice(0, 18)}…</div> : null}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SettingsTab({ companyId, company }: { companyId: string; company: Company | null }) {
   const data = usePluginData<{ settings: Settings; paymentMethods: PaymentMethod[] }>('settings', { companyId });
   const update = usePluginAction('settings.update');
@@ -1078,6 +1154,7 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
           {connected && <button className="ai3-btn" disabled={busy} onClick={() => run(async () => { await update({ companyId, ai3Key: '', replyTo: s.replyTo ?? '' }); setForm(null); }, 'Disconnected')}>Disconnect</button>}
         </div>
       </div>
+      <WalletCard companyId={companyId} />
       <div className="ai3-card" style={{ marginTop: 14 }}>
         <div className="ai3-toolbar">
           <h3 style={{ margin: 0 }}>Payment options <span className="ctx">what customers see under "How to pay"</span></h3>
@@ -1167,6 +1244,7 @@ function InvoicesTab({ companyId, company }: { companyId: string; company: Compa
           </tbody>
         </table>
       </div>
+      <DisputesList companyId={companyId} />
     </>
   );
 }

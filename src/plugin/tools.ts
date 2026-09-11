@@ -38,6 +38,13 @@ import {
   setInvoiceHosted,
   voidInvoice,
   writeOffInvoice,
+  postTransaction,
+  ACCOUNT,
+  getWallet,
+  createDispute,
+  updateDispute,
+  listDisputes,
+  getDispute,
   type Decision,
   type Invoice,
   type InvoiceStatus,
@@ -45,6 +52,8 @@ import {
   type StatementLine,
 } from '../core/index.js';
 import { isConnected, publishInvoice, sendInvoice, type FetchLike } from './ai3.js';
+import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, pay, requestFaucet, syncWalletFeed } from './tempo.js';
+import { RecourseError, DISPUTE_CLAUSE, buildBundle, describeRuling, fileDispute, getCase, invoiceForBundle, type CaseRecord, type Ruling } from './recourse.js';
 
 export interface ToolDeps {
   db: LedgerDb;
@@ -145,6 +154,18 @@ function lineSummary(line: StatementLine): Record<string, unknown> {
         }
       : null,
   };
+}
+
+/** The machine-readable copy of a hosted invoice on ai3.co (or any host serving the same JSON). */
+export interface RemoteInvoice { number: string; currency: string; totalMinor: string; outstandingMinor: string; issuedAt: string | null; dueAt: string | null; status: string; lines: Array<{ description: string; quantity: string; amountMinor: string }>; notes: string | null; paymentMethods: Array<{ kind: string; label: string; details: Record<string, string> }>; company: { name: string; email: string | null }; disputes: string | null; url: string }
+export async function fetchInvoiceDocument(fetch: FetchLike, url: string): Promise<RemoteInvoice> {
+  if (!/^https:\/\/[^\s/]+\/i\/[A-Za-z0-9_-]{16,80}$/.test(url.trim())) throw new LedgerError('the invoice link must look like https://ai3.co/i/<token>', 'invalid');
+  const r = await fetch(`${url.trim()}.json`, { headers: { accept: 'application/json' } });
+  if (!r.ok) throw new LedgerError(`the invoice link answered ${r.status}`, 'invalid');
+  const d = (await r.json()) as Partial<RemoteInvoice> & { invoice?: Partial<RemoteInvoice> };
+  const inv = (d.invoice ?? d) as Partial<RemoteInvoice>;
+  if (!inv.number || !inv.currency) throw new LedgerError('the invoice link did not return an invoice', 'invalid');
+  return { number: inv.number, currency: inv.currency, totalMinor: String(inv.totalMinor ?? '0'), outstandingMinor: String(inv.outstandingMinor ?? '0'), issuedAt: inv.issuedAt ?? null, dueAt: inv.dueAt ?? null, status: inv.status ?? 'issued', lines: inv.lines ?? [], notes: inv.notes ?? null, paymentMethods: inv.paymentMethods ?? [], company: { name: inv.company?.name ?? 'Unknown', email: inv.company?.email ?? null }, disputes: inv.disputes ?? null, url: url.trim() };
 }
 
 /** Find an invoice by id or number, within the company. */
@@ -353,6 +374,60 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
     displayName: 'Balance sheet',
     description: 'Assets, liabilities and equity as of a date (default today).',
     parametersSchema: { type: 'object', properties: { asOf: DATE }, additionalProperties: false },
+  },
+  {
+    name: 'wallet',
+    displayName: 'Company wallet',
+    description: 'The company’s stablecoin wallet on Tempo (Stripe’s payments chain, testnet): address, pathUSD balance, explorer link. It is printed on invoices as a payment option and its feed reconciles itself. Pass topUp true to ask the testnet faucet for more test money.',
+    parametersSchema: { type: 'object', properties: { topUp: { type: 'boolean', description: 'Request test stablecoins from the faucet.' }, sync: { type: 'boolean', description: 'Read new chain transfers into the books now instead of waiting for the feed job.' } }, additionalProperties: false },
+  },
+  {
+    name: 'pay-invoice',
+    displayName: 'Pay an invoice',
+    description: 'Pay an invoice the company received, in pathUSD from the company wallet, with the invoice number in the transfer memo so the seller’s books reconcile it automatically. Give the invoice’s online link (an ai3.co/i/… URL) and the amount and address are read from it; or give a raw address and amount. Books the payment as an expense.',
+    parametersSchema: {
+      type: 'object',
+      properties: {
+        invoiceUrl: { type: 'string', description: 'The invoice’s online link, e.g. https://ai3.co/i/abc. Amount, currency, payee address and invoice number come from it.' },
+        to: { type: 'string', description: 'Payee wallet address, when there is no invoice link.' },
+        amount: { ...AMOUNT, description: 'Amount to pay. Defaults to the invoice’s outstanding amount.' },
+        memo: { type: 'string', description: 'Up to 32 characters in the transfer memo. Defaults to the invoice number.' },
+        description: { type: 'string', description: 'What this pays for, for the books.' },
+        accountCode: { type: 'string', description: 'Expense account to book it to. Defaults to 5900 Other operating; 5100 for tools and APIs, 5000 for model inference.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'dispute-invoice',
+    displayName: 'Dispute an invoice',
+    description: 'File a dispute at Recourse (recourse.so), the venue every invoice names, signed with the company wallet. As the buyer, give the invoice’s online link and what went wrong. As the seller, give your own invoice number (for example non-payment) and the buyer’s wallet address. The ruling comes back in about a minute with a fault split and a money instruction on the Tempo rail; use settle-dispute to carry it out.',
+    parametersSchema: {
+      type: 'object',
+      properties: {
+        invoiceUrl: { type: 'string', description: 'The other party’s invoice link, when you are the buyer.' },
+        invoice: { type: 'string', description: 'Your own invoice number or id, when you are the seller.' },
+        counterpartyAddress: { type: 'string', description: 'The other party’s wallet address, needed when you are the seller.' },
+        breach: { type: 'string', description: 'What was agreed and what went wrong, in plain words.' },
+        remedy: { type: 'string', description: 'What you want: refund, payment, reduction.' },
+        evidence: { type: 'string', description: 'Anything else the adjudicator should read: delivery notes, messages, dates.' },
+        amount: { ...AMOUNT, description: 'Amount in dispute. Defaults to the invoice’s outstanding amount.' },
+      },
+      required: ['breach'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'dispute',
+    displayName: 'Dispute status',
+    description: 'Disputes this company is party to, with the ruling and money instruction once decided. Pass a dispute or case id for one and it is refreshed from the venue.',
+    parametersSchema: { type: 'object', properties: { dispute: { type: 'string', description: 'Dispute id or Recourse case id. Omit to list all.' } }, additionalProperties: false },
+  },
+  {
+    name: 'settle-dispute',
+    displayName: 'Settle a dispute',
+    description: 'Carry out a ruling’s money instruction from the company wallet: every transfer the ruling says this company owes is sent in pathUSD with the case id in the memo, and booked.',
+    parametersSchema: { type: 'object', properties: { dispute: { type: 'string', description: 'Dispute id or Recourse case id.' } }, required: ['dispute'], additionalProperties: false },
   },
 ];
 
@@ -608,12 +683,153 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
           data: { currency: r.currency, asOf: day(r.asOf), assets: section(r.assets), liabilities: section(r.liabilities), equity: { ...section(r.equity), retainedEarnings: minorToMajor(r.equity.retainedEarningsMinor) }, balances: r.balances },
         };
       }
+      case 'wallet': {
+        const ens = await ensureWallet(db, companyId, deps.baseCurrency);
+        const w = ens.wallet;
+        let faucet: { ok: boolean; detail: string } | null = ens.faucet ?? null;
+        if (p['topUp'] === true && !ens.created) faucet = await requestFaucet(w.address);
+        let synced: Awaited<ReturnType<typeof syncWalletFeed>> = null;
+        if (p['sync'] === true) synced = await syncWalletFeed(db, companyId, { by });
+        const bal = await balanceCents(w.address).catch(() => null);
+        return {
+          content: `Wallet ${w.address} on ${TEMPO_NETWORK_LABEL}: ${bal === null ? 'balance unavailable' : `${minorToMajor(bal)} ${PATH_USD_SYMBOL}`}.${faucet ? ` Faucet: ${faucet.ok ? 'topped up' : `failed (${faucet.detail.slice(0, 80)})`}.` : ''}${synced ? ` Chain read: ${synced.imported} new transfer(s), ${synced.autoPosted} posted, ${synced.leftForReview} to review.` : ''}`,
+          data: { address: w.address, network: w.network, networkLabel: TEMPO_NETWORK_LABEL, asset: PATH_USD_SYMBOL, balance: bal === null ? null : minorToMajor(bal), explorer: explorerAddress(w.address), bankAccountId: w.bankAccountId, paymentMethodId: w.paymentMethodId, faucet, synced },
+        };
+      }
+      case 'pay-invoice': {
+        const { wallet } = await ensureWallet(db, companyId, deps.baseCurrency);
+        let to = str(p['to']);
+        let amountCents = p['amount'] !== undefined && p['amount'] !== '' ? majorToMinor(p['amount']) : null;
+        let memo = str(p['memo']);
+        let description = str(p['description']);
+        const url = str(p['invoiceUrl']);
+        let remote: { number: string; company: string; currency: string } | null = null;
+        if (url) {
+          const doc = await fetchInvoiceDocument(deps.fetch, url);
+          const crypto = doc.paymentMethods.find((m) => m.kind === 'crypto' && /tempo/i.test(m.details.network ?? '') && m.details.address);
+          if (!crypto?.details.address) throw new LedgerError(`invoice ${doc.number} offers no Tempo wallet to pay into`, 'invalid');
+          if (doc.currency !== 'USD') throw new LedgerError(`invoice ${doc.number} is in ${doc.currency}; the wallet pays ${PATH_USD_SYMBOL} (USD) only`, 'invalid');
+          to = crypto.details.address;
+          amountCents = amountCents ?? BigInt(doc.outstandingMinor);
+          memo = memo ?? doc.number;
+          description = description ?? `Invoice ${doc.number} from ${doc.company.name}`;
+          remote = { number: doc.number, company: doc.company.name, currency: doc.currency };
+        }
+        if (!to) throw new LedgerError('give an invoice link or a payee address', 'invalid');
+        if (amountCents === null) throw new LedgerError('give an amount', 'invalid');
+        if (!memo) memo = description?.slice(0, 32) ?? 'payment';
+        const result = await pay(wallet, { to, amountCents, memo });
+        // Book it: the expense now, the wallet line arrives with the feed and matches this.
+        const bank = wallet.bankAccountId ? await getBankAccount(db, companyId, wallet.bankAccountId) : null;
+        const code = str(p['accountCode']) ?? ACCOUNT.OTHER_OPERATING;
+        if (bank) {
+          await postTransaction(db, { companyId, occurredAt: new Date(), description: description ?? `Paid ${to} · ${memo}`, sourcePlatform: 'tempo', sourceKind: 'payment', sourceRef: `tempo:${result.txHash}`, currency: 'USD', entries: [{ accountCode: code, direction: 'debit', amountMinor: amountCents }, { accountCode: bank.accountCode, direction: 'credit', amountMinor: amountCents }], createdBy: by });
+        }
+        return {
+          content: `Paid ${minorToMajor(amountCents)} ${PATH_USD_SYMBOL} to ${to}${remote ? ` for invoice ${remote.number} from ${remote.company}` : ''}, memo "${memo}". Transaction ${result.txHash} (${result.explorer}). Booked to ${code}.`,
+          data: { txHash: result.txHash, explorer: result.explorer, to, amount: minorToMajor(amountCents), asset: PATH_USD_SYMBOL, memo, invoice: remote?.number ?? null, accountCode: code },
+        };
+      }
+      case 'dispute-invoice': {
+        const breach = str(p['breach']);
+        if (!breach) throw new LedgerError('say what went wrong (breach)', 'invalid');
+        const { wallet } = await ensureWallet(db, companyId, deps.baseCurrency);
+        const url = str(p['invoiceUrl']);
+        const ownRef = str(p['invoice']);
+        const companyName = await deps.companyName(companyId);
+        // At the venue the buyer is always the claimant and the seller the respondent; `role` is who opened the case.
+        let role: 'claimant' | 'respondent';
+        let invoiceForCase: Parameters<typeof buildBundle>[0]['invoice'];
+        let claimantAddress: string;
+        let respondentAddress: string;
+        let invoiceId: string | null = null;
+        let invoiceNumber: string;
+        if (url) {
+          const doc = await fetchInvoiceDocument(deps.fetch, url);
+          const crypto = doc.paymentMethods.find((m) => m.kind === 'crypto' && m.details.address);
+          respondentAddress = str(p['counterpartyAddress']) ?? crypto?.details.address ?? '0x0000000000000000000000000000000000000000';
+          claimantAddress = wallet.address; // we are the buyer
+          role = 'claimant';
+          invoiceNumber = doc.number;
+          invoiceForCase = { number: doc.number, currency: doc.currency, totalMinor: doc.totalMinor, outstandingMinor: doc.outstandingMinor, issuedAt: doc.issuedAt, dueAt: doc.dueAt, lines: doc.lines.map((l) => ({ description: l.description, quantity: l.quantity, amountMinor: l.amountMinor })), notes: doc.notes, url, sellerName: doc.company.name, buyerName: companyName };
+        } else if (ownRef) {
+          const inv = await findInvoice(db, companyId, ownRef);
+          const counter = str(p['counterpartyAddress']);
+          if (!counter) throw new LedgerError('as the seller, give the buyer’s wallet address (counterpartyAddress)', 'invalid');
+          role = 'respondent'; // we are the provider, opening the case
+          claimantAddress = counter;
+          respondentAddress = wallet.address;
+          invoiceId = inv.id;
+          invoiceNumber = inv.number;
+          invoiceForCase = invoiceForBundle(inv, companyName);
+        } else {
+          throw new LedgerError('give the other party’s invoice link, or your own invoice number with the buyer’s wallet address', 'invalid');
+        }
+        const amountMinor = p['amount'] !== undefined && p['amount'] !== '' ? majorToMinor(p['amount']) : null;
+        const row = await createDispute(db, { companyId, invoiceId, invoiceNumber, invoiceUrl: url ?? invoiceForCase.url ?? null, role, amountMinor: amountMinor ?? BigInt(invoiceForCase.outstandingMinor), currency: invoiceForCase.currency, claim: breach, filedBy: by, status: 'filing' });
+        const bundle = buildBundle({ role, invoice: invoiceForCase, breach, remedy: str(p['remedy']) ?? null, evidence: str(p['evidence']) ?? null, amountMinor, claimantAddress, respondentAddress, externalRef: `ai3:${companyId}:${row.id}` });
+        let rec: CaseRecord;
+        try {
+          rec = await fileDispute(deps.fetch, wallet.privateKey as `0x${string}`, bundle);
+        } catch (err) {
+          await updateDispute(db, companyId, row.id, { status: 'failed' });
+          throw err;
+        }
+        const ruling = (rec.ruling ?? null) as Ruling | null;
+        const saved = await updateDispute(db, companyId, row.id, { caseId: rec.id, status: ruling ? 'decided' : rec.status || 'pending', ruling, instruction: rec.rail_instruction ?? null });
+        return {
+          content: ruling ? `Dispute ${rec.id} filed at Recourse over ${invoiceNumber}. ${describeRuling(ruling)}${rec.rail_instruction ? ' Use settle-dispute to carry out the money instruction.' : ''}` : `Dispute ${rec.id} filed at Recourse over ${invoiceNumber}; the ruling is still being written. Check with the dispute tool.`,
+          data: { disputeId: saved.id, caseId: rec.id, status: saved.status, role, invoice: invoiceNumber, ruling, instruction: rec.rail_instruction ?? null, caseUrl: `https://recourse.so/disputes/${rec.id}` },
+        };
+      }
+      case 'dispute': {
+        const ref = str(p['dispute']);
+        if (!ref) {
+          const all = await listDisputes(db, companyId);
+          return { content: all.length === 0 ? 'No disputes.' : `${all.length} dispute(s): ${all.map((d) => `${d.invoiceNumber ?? '?'} (${d.role}, ${d.status})`).join('; ')}.`, data: { disputes: all.map((d) => ({ disputeId: d.id, caseId: d.caseId, invoice: d.invoiceNumber, role: d.role, status: d.status, amount: minorToMajor(d.amountMinor), currency: d.currency, filedAt: d.filedAt, ruling: d.ruling, instruction: d.instruction, settledTx: d.settledTx })) } };
+        }
+        let d = await getDispute(db, companyId, ref);
+        if (!d) throw new LedgerError(`no dispute ${ref}`, 'invalid');
+        if (d.caseId && (d.status === 'pending' || d.status === 'filed' || !d.ruling)) {
+          const rec = await getCase(deps.fetch, d.caseId);
+          const ruling = (rec.ruling ?? null) as Ruling | null;
+          d = await updateDispute(db, companyId, d.id, { status: ruling ? 'decided' : rec.status || d.status, ruling, instruction: rec.rail_instruction ?? d.instruction });
+        }
+        const ruling = d.ruling as Ruling | null;
+        return { content: ruling ? `${d.invoiceNumber ?? d.id}: ${describeRuling(ruling)}` : `${d.invoiceNumber ?? d.id}: ${d.status}.`, data: { disputeId: d.id, caseId: d.caseId, invoice: d.invoiceNumber, role: d.role, status: d.status, ruling, instruction: d.instruction, settledTx: d.settledTx, caseUrl: d.caseId ? `https://recourse.so/disputes/${d.caseId}` : null } };
+      }
+      case 'settle-dispute': {
+        const ref = str(p['dispute']);
+        const d = ref ? await getDispute(db, companyId, ref) : null;
+        if (!d) throw new LedgerError(`no dispute ${ref ?? ''}`, 'invalid');
+        const instr = d.instruction as { rail?: string; transfer_intents?: Array<{ to: string; amount_minor: number; asset: string; memo: string }> } | null;
+        if (!instr || instr.rail !== 'tempo' || !instr.transfer_intents?.length) throw new LedgerError('this dispute has no Tempo money instruction to carry out', 'invalid');
+        if (d.settledTx) return { content: `Already settled: ${d.settledTx}.`, data: { disputeId: d.id, settledTx: d.settledTx } };
+        const { wallet } = await ensureWallet(db, companyId, deps.baseCurrency);
+        const bank = wallet.bankAccountId ? await getBankAccount(db, companyId, wallet.bankAccountId) : null;
+        const mine = wallet.address.toLowerCase();
+        const owed = instr.transfer_intents.filter((t) => t.to.toLowerCase() !== mine && t.amount_minor > 0);
+        if (owed.length === 0) return { content: 'The ruling sends nothing from this company; the other party settles.', data: { disputeId: d.id, owed: [] } };
+        const txs: string[] = [];
+        for (const t of owed) {
+          const cents = BigInt(t.amount_minor);
+          const r = await pay(wallet, { to: t.to, amountCents: cents, memo: t.memo });
+          txs.push(r.txHash);
+          if (bank) {
+            const code = d.role === 'respondent' ? ACCOUNT.SERVICE_INCOME : ACCOUNT.OTHER_OPERATING;
+            await postTransaction(db, { companyId, occurredAt: new Date(), description: `Dispute ${d.caseId ?? d.id} settlement to ${t.to}`, sourcePlatform: 'tempo', sourceKind: 'payment', sourceRef: `tempo:${r.txHash}`, currency: 'USD', entries: [{ accountCode: code, direction: 'debit', amountMinor: cents }, { accountCode: bank.accountCode, direction: 'credit', amountMinor: cents }], createdBy: by });
+          }
+        }
+        const after = await updateDispute(db, companyId, d.id, { status: 'settled', settledTx: txs.join(',') });
+        return { content: `Settled: ${owed.map((t, i) => `${minorToMajor(BigInt(t.amount_minor))} ${PATH_USD_SYMBOL} to ${t.to} (${txs[i]})`).join('; ')}.`, data: { disputeId: after.id, settledTx: after.settledTx, transfers: owed.map((t, i) => ({ to: t.to, amount: minorToMajor(BigInt(t.amount_minor)), txHash: txs[i] })) } };
+      }
       default:
         return { error: `Unknown tool ${name}` };
     }
   } catch (err) {
     if (err instanceof LedgerError || err instanceof RangeError || err instanceof TypeError) return { error: err.message };
     if (err instanceof Error && err.name === 'Ai3Error') return { error: err.message };
+    if (err instanceof RecourseError) return { error: err.message };
     throw err;
   }
 }
