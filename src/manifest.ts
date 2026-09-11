@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.9.0',
+  version: '0.10.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -68,6 +68,12 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: 'Finance briefing',
       description: 'Each morning, writes what needs attention (overdue and unsent invoices, unreconciled lines, short runway) as one task per company, updated in place.',
       schedule: '0 8 * * *',
+    },
+    {
+      jobKey: 'reminders',
+      displayName: 'Overdue reminders',
+      description: 'Emails a reminder at 3, 14 and 30 days past due from the owner’s mailbox, for companies that turned reminders on.',
+      schedule: '0 9 * * *',
     },
   ],
   apiRoutes: [

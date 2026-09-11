@@ -21,16 +21,18 @@ export interface CompanySettings {
   /** ai3.co connection: the per-company key and the origin to push to. */
   ai3Key: string | null;
   ai3Origin: string | null;
+  /** Send overdue reminders from the owner's mailbox at 3, 14 and 30 days. Off unless a person turns it on. */
+  remindersEnabled: boolean;
 }
 
 export async function getSettings(db: LedgerDb, companyId: string, fallbackCurrency = 'USD'): Promise<CompanySettings> {
-  const rows = await db.sql.query<{ base_currency: string; legal_name: string | null; address: string | null; email: string | null; tax_id: string | null; invoice_footer: string | null; reply_to: string | null; ai3_key: string | null; ai3_origin: string | null }>(
-    `SELECT base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin FROM ${table(db, 'company_settings')} WHERE company_id = $1`,
+  const rows = await db.sql.query<{ base_currency: string; legal_name: string | null; address: string | null; email: string | null; tax_id: string | null; invoice_footer: string | null; reply_to: string | null; ai3_key: string | null; ai3_origin: string | null; reminders_enabled: boolean }>(
+    `SELECT base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin, reminders_enabled FROM ${table(db, 'company_settings')} WHERE company_id = $1`,
     [companyId],
   );
   const r = rows[0];
-  if (!r) return { companyId, baseCurrency: fallbackCurrency, legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null };
-  return { companyId, baseCurrency: r.base_currency, legalName: r.legal_name, address: r.address, email: r.email, taxId: r.tax_id, invoiceFooter: r.invoice_footer, replyTo: r.reply_to, ai3Key: r.ai3_key, ai3Origin: r.ai3_origin };
+  if (!r) return { companyId, baseCurrency: fallbackCurrency, legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null, remindersEnabled: false };
+  return { companyId, baseCurrency: r.base_currency, legalName: r.legal_name, address: r.address, email: r.email, taxId: r.tax_id, invoiceFooter: r.invoice_footer, replyTo: r.reply_to, ai3Key: r.ai3_key, ai3Origin: r.ai3_origin, remindersEnabled: r.reminders_enabled === true };
 }
 
 export async function updateSettings(db: LedgerDb, companyId: string, input: Partial<Omit<CompanySettings, 'companyId'>>): Promise<CompanySettings> {
@@ -39,11 +41,11 @@ export async function updateSettings(db: LedgerDb, companyId: string, input: Par
   const base = assertCurrency(next.baseCurrency);
   const clean = (v: string | null | undefined, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
   await db.sql.execute(
-    `INSERT INTO ${table(db, 'company_settings')} (company_id, base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO ${table(db, 'company_settings')} (company_id, base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin, reminders_enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::boolean)
      ON CONFLICT (company_id) DO UPDATE SET base_currency = EXCLUDED.base_currency, legal_name = EXCLUDED.legal_name, address = EXCLUDED.address,
-       email = EXCLUDED.email, tax_id = EXCLUDED.tax_id, invoice_footer = EXCLUDED.invoice_footer, reply_to = EXCLUDED.reply_to, ai3_key = EXCLUDED.ai3_key, ai3_origin = EXCLUDED.ai3_origin, updated_at = now()`,
-    [companyId, base, clean(next.legalName, 200), clean(next.address, 500), clean(next.email, 200), clean(next.taxId, 100), clean(next.invoiceFooter, 1000), clean(next.replyTo, 200), clean(next.ai3Key, 200), clean(next.ai3Origin, 200)],
+       email = EXCLUDED.email, tax_id = EXCLUDED.tax_id, invoice_footer = EXCLUDED.invoice_footer, reply_to = EXCLUDED.reply_to, ai3_key = EXCLUDED.ai3_key, ai3_origin = EXCLUDED.ai3_origin, reminders_enabled = EXCLUDED.reminders_enabled, updated_at = now()`,
+    [companyId, base, clean(next.legalName, 200), clean(next.address, 500), clean(next.email, 200), clean(next.taxId, 100), clean(next.invoiceFooter, 1000), clean(next.replyTo, 200), clean(next.ai3Key, 200), clean(next.ai3Origin, 200), next.remindersEnabled === true],
   );
   return getSettings(db, companyId);
 }

@@ -77,4 +77,5 @@ export { parseRate, toBase, setInvoicePaymentMethods } from './invoices.js';
 
 export type { RateQuote, FetchLike } from './rates.js';
 export { getRate, isCrypto, clearRateCache, RateError } from './rates.js';
-export { setInvoiceHosted, markInvoiceSent, markInvoiceOpened } from './invoices.js';
+export { setInvoiceHosted, markInvoiceSent, markInvoiceOpened, markInvoiceReminded } from './invoices.js';
+export { REMINDER_DAYS, dueReminders, reminderEmail, type DueReminder } from './reminders.js';

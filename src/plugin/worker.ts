@@ -65,6 +65,9 @@ import {
   setInvoiceHosted,
   markInvoiceSent,
   markInvoiceOpened,
+  markInvoiceReminded,
+  dueReminders,
+  reminderEmail,
   type PaymentKind,
   type Decision,
   type BankKind,
@@ -650,6 +653,7 @@ const plugin = definePlugin({
         ...(params['replyTo'] !== undefined ? { replyTo: pick('replyTo') ?? null } : {}),
         ...(params['ai3Key'] !== undefined ? { ai3Key: pick('ai3Key') ?? null } : {}),
         ...(params['ai3Origin'] !== undefined ? { ai3Origin: pick('ai3Origin') ?? null } : {}),
+        ...(params['remindersEnabled'] !== undefined ? { remindersEnabled: params['remindersEnabled'] === true } : {}),
       });
     });
     // Hosted invoice pages on ai3.co and sending
@@ -859,6 +863,37 @@ const plugin = definePlugin({
       // A failed company marks the run failed, so the job dashboard shows it.
       if (failures.length > 0) throw new Error(`briefing not written for ${failures.length} company(ies): ${failures.join('; ')}`.slice(0, 1000));
     });
+    // Overdue reminders, daily, only for companies that turned them on.
+    context.jobs.register('reminders', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let sent = 0;
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          const settings = await getSettings(ledger(), company.id, CURRENCY);
+          if (!settings.remindersEnabled || !isConnected(settings)) continue;
+          for (const r of await dueReminders(ledger(), company.id)) {
+            const inv = r.invoice;
+            if (!inv.hosted?.sentTo) continue;
+            const mail = reminderEmail(r, settings.legalName || company.name);
+            try {
+              await sendInvoice(httpFetch, settings, { companyId: company.id, token: inv.hosted.token, to: inv.hosted.sentTo, subject: mail.subject, message: mail.message, replyTo: settings.replyTo ?? settings.email ?? null });
+              await markInvoiceReminded(ledger(), company.id, inv.id, r.stage);
+              sent += 1;
+            } catch (err) {
+              failures.push(`${inv.number}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        } catch (err) {
+          failures.push(`${company.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      context.logger.info('ledger: reminders done', { runId: job.runId, sent, failed: failures.length });
+      if (failures.length > 0) throw new Error(`reminders not sent: ${failures.join('; ')}`.slice(0, 1000));
+    });
+    // A fresh tenant should not wait for the next quarter hour: first sweep
+    // (which also installs the company skill) shortly after boot.
+    setTimeout(() => { void sweepAll().catch((err) => context.logger.warn('ledger: first sweep failed', { error: err instanceof Error ? err.message : String(err) })); }, 20_000);
     context.logger.info('ledger: ready', { namespace: context.db.namespace });
   },
 

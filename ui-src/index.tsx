@@ -570,7 +570,7 @@ const NETWORKS = ['Base', 'Ethereum', 'Solana', 'Polygon', 'Arbitrum', 'Optimism
 interface PaymentDetails { accountName?: string; bankName?: string; accountNumber?: string; iban?: string; sortCode?: string; routingNumber?: string; bic?: string; url?: string; network?: string; asset?: string; address?: string; instructions?: string }
 interface PaymentMethod { id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails; isDefault: boolean; enabled: boolean }
 interface RateQuote { from: string; to: string; rate: string; date: string; source: string }
-interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null; replyTo: string | null; ai3Key: string | null; ai3Origin: string | null }
+interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null; replyTo: string | null; ai3Key: string | null; ai3Origin: string | null; remindersEnabled: boolean }
 
 const KIND_TITLE: Record<PaymentMethod['kind'], string> = { bank: 'Bank transfer', stripe: 'Pay online', crypto: 'Crypto', other: 'Other' };
 
@@ -1017,7 +1017,7 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
   const { run, busy } = useRun([data.refresh]);
   const [form, setForm] = useState<Settings | null>(null);
   const [adding, setAdding] = useState(false);
-  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null };
+  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null, remindersEnabled: false };
   const connected = Boolean(data.data?.settings.ai3Key);
   const [showKey, setShowKey] = useState(false);
   const setField = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...s, [k]: e.target.value });
@@ -1069,8 +1069,12 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
           </Field>
           <Field label="Reply-to (optional)"><input className="ai3-input" value={s.replyTo ?? ''} onChange={setField('replyTo')} placeholder={s.email ?? 'billing@…'} /></Field>
         </div>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', cursor: 'pointer' }}>
+          <input type="checkbox" checked={s.remindersEnabled} disabled={busy} onChange={(e) => setForm({ ...s, remindersEnabled: e.target.checked })} />
+          <span>Send overdue reminders automatically <span className="ai3-cap" style={{ display: 'inline' }}>· 3, 14 and 30 days past due, from your mailbox, only for invoices that were emailed</span></span>
+        </label>
         <div className="ai3-actions">
-          <button className="ai3-btn primary" disabled={busy || !form} onClick={() => run(async () => { await update({ companyId, ai3Key: s.ai3Key ?? '', ai3Origin: s.ai3Origin || 'https://ai3.co', replyTo: s.replyTo ?? '' }); setForm(null); }, connected || s.ai3Key ? 'Connection saved' : 'Disconnected')}>Save</button>
+          <button className="ai3-btn primary" disabled={busy || !form} onClick={() => run(async () => { await update({ companyId, ai3Key: s.ai3Key ?? '', ai3Origin: s.ai3Origin || 'https://ai3.co', replyTo: s.replyTo ?? '', remindersEnabled: s.remindersEnabled }); setForm(null); }, connected || s.ai3Key ? 'Connection saved' : 'Disconnected')}>Save</button>
           {connected && <button className="ai3-btn" disabled={busy} onClick={() => run(async () => { await update({ companyId, ai3Key: '', replyTo: s.replyTo ?? '' }); setForm(null); }, 'Disconnected')}>Disconnect</button>}
         </div>
       </div>
