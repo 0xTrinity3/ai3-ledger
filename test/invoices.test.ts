@@ -171,3 +171,19 @@ describe('M3 · issue, pay, write off', () => {
     expect(p.balanceSheet.balances).toBe(true);
   });
 });
+
+describe('voiding an issued invoice', () => {
+  it('reverses the issue posting when nothing was paid, and refuses once paid', async () => {
+    const before = await balanceOf(db, CO, ACCOUNT.RECEIVABLES);
+    const inv = await createInvoice(db, CO, { customerId, currency: 'USD', lines: [{ description: 'Raised in error', quantity: '1', unitAmountMinor: '7000' }] });
+    await issueInvoice(db, CO, inv.id, {});
+    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before + 7000n);
+    const voided = await voidInvoice(db, CO, inv.id, { reason: 'duplicate' });
+    expect(voided.status).toBe('void');
+    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before);
+    const paid = await createInvoice(db, CO, { customerId, currency: 'USD', lines: [{ description: 'Paid', quantity: '1', unitAmountMinor: '1000' }] });
+    await issueInvoice(db, CO, paid.id, {});
+    await recordPayment(db, CO, paid.id, { amountMinor: 500n, reference: 'p1' });
+    await expect(voidInvoice(db, CO, paid.id)).rejects.toThrow(/part_paid; only a draft or an unpaid issued invoice/);
+  });
+});

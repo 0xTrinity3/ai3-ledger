@@ -20,7 +20,7 @@
  * plugin sandbox. Nothing here knows about Paperclip.
  */
 import { ACCOUNT } from './accounts.js';
-import { LedgerError, postTransaction, type EntryInput, type Subject } from './ledger.js';
+import { LedgerError, findTransactionBySourceRef, postReversal, postTransaction, type EntryInput, type Subject } from './ledger.js';
 import { getSettings, paymentInstructionsFor, type PaymentInstruction } from './settings.js';
 import { assertCurrency, assertPositiveMinor, fromMinor, newId, table, toIso, toMinor, type LedgerDb, type Minor } from './sql.js';
 
@@ -561,11 +561,27 @@ export async function writeOffInvoice(
 }
 
 /** Void a draft. Nothing was ever posted, so nothing is reversed. */
-export async function voidInvoice(db: LedgerDb, companyId: string, id: string): Promise<Invoice> {
+/**
+ * Cancel an invoice raised in error. A draft is simply voided. An issued
+ * invoice with nothing paid on it is reversed: the issue posting gets a
+ * reversing transaction, so the receivable and the income disappear and the
+ * ledger stays append-only. Anything with a payment on it cannot be voided;
+ * write it off or refund it.
+ */
+export async function voidInvoice(db: LedgerDb, companyId: string, id: string, opts: { createdBy?: string; reason?: string } = {}): Promise<Invoice> {
   const inv = await getInvoice(db, companyId, id);
   if (!inv) throw new LedgerError(`invoice ${id} not found for company ${companyId}`, 'invalid');
-  if (inv.status !== 'draft') throw new LedgerError(`only a draft can be voided; ${inv.number} is ${inv.status}`, 'invalid');
-  await setStatus(db, companyId, id, ['draft'], 'void');
+  if (inv.status === 'draft') {
+    await setStatus(db, companyId, id, ['draft'], 'void');
+    return (await getInvoice(db, companyId, id)) ?? { ...inv, status: 'void' };
+  }
+  if (inv.status !== 'issued') throw new LedgerError(`${inv.number} is ${inv.status}; only a draft or an unpaid issued invoice can be voided`, 'invalid');
+  if (toMinor(inv.paidMinor) !== 0n) throw new LedgerError(`${inv.number} has payments on it; write it off or refund it instead`, 'invalid');
+  const issueTx = await findTransactionBySourceRef(db, companyId, 'manual', ISSUE_REF(inv.id));
+  if (issueTx) {
+    await postReversal(db, companyId, issueTx, { description: `Void ${inv.number}${opts.reason ? ` · ${opts.reason}` : ''}`, createdBy: opts.createdBy ?? 'board' });
+  }
+  await setStatus(db, companyId, id, ['issued'], 'void');
   return (await getInvoice(db, companyId, id)) ?? { ...inv, status: 'void' };
 }
 
