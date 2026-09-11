@@ -218,6 +218,9 @@ interface Invoice {
   paymentMethods: Array<{ id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails }>;
   notes: string | null;
   payments: Array<{ id: string; occurredAt: string; amountMinor: string; rateToBase: string; baseMinor: string; reference: string | null }>;
+  hosted: { token: string; url: string; hostedAt: string; sentAt: string | null; sentTo: string | null; openedAt: string | null; openCount: number } | null;
+  connected?: boolean;
+  sender?: { email: string; via: string } | null;
 }
 interface Customer { id: string; name: string; email: string | null }
 interface Period { id: string; label: string; startsOn: string; endsOn: string; status: 'open' | 'closed' }
@@ -567,7 +570,7 @@ const NETWORKS = ['Base', 'Ethereum', 'Solana', 'Polygon', 'Arbitrum', 'Optimism
 interface PaymentDetails { accountName?: string; bankName?: string; accountNumber?: string; iban?: string; sortCode?: string; routingNumber?: string; bic?: string; url?: string; network?: string; asset?: string; address?: string; instructions?: string }
 interface PaymentMethod { id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails; isDefault: boolean; enabled: boolean }
 interface RateQuote { from: string; to: string; rate: string; date: string; source: string }
-interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null }
+interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null; replyTo: string | null; ai3Key: string | null; ai3Origin: string | null }
 
 const KIND_TITLE: Record<PaymentMethod['kind'], string> = { bank: 'Bank transfer', stripe: 'Pay online', crypto: 'Crypto', other: 'Other' };
 
@@ -789,7 +792,14 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
   const writeOff = usePluginAction('invoice.writeoff');
   const voidIt = usePluginAction('invoice.void');
   const setMethods = usePluginAction('invoice.set-payment-methods');
+  const publish = usePluginAction('invoice.publish');
+  const send = usePluginAction('invoice.send');
   const { run, busy } = useRun([full.refresh, onChanged]);
+  const [sending, setSending] = useState(false);
+  const [sendTo, setSendTo] = useState('');
+  const [sendCc, setSendCc] = useState('');
+  const [sendMsg, setSendMsg] = useState('');
+  const [copied, setCopied] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate] = useState(today());
   const [payRef, setPayRef] = useState('');
@@ -836,9 +846,52 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
               <button className="ai3-btn danger" disabled={busy} onClick={() => run(() => voidIt({ companyId, invoiceId: inv.id }), `${inv.number} voided`)}>Void</button>
             </>
           )}
+          {openStatus && inv.connected && <button className="ai3-btn primary" disabled={busy} onClick={() => { setSendTo(inv.hosted?.sentTo ?? inv.customerEmail ?? ''); setSending((v) => !v); }}>{inv.hosted?.sentAt ? 'Send again' : 'Send'}</button>}
           {openStatus && <button className="ai3-btn danger" disabled={busy} onClick={() => run(() => writeOff({ companyId, invoiceId: inv.id }), `${inv.number} written off`)}>Write off</button>}
         </div>
       </div>
+      {openStatus && full.data && (
+        <div className="ai3-card" style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+          {inv.hosted ? (
+            <>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600 }}>Online copy</div>
+                <a href={inv.hosted.url} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{inv.hosted.url}</a>
+                <div className="ai3-note" style={{ marginTop: 4 }}>
+                  {inv.hosted.sentAt ? `Sent ${dateLong(inv.hosted.sentAt)} to ${inv.hosted.sentTo ?? ''}` : 'Not sent yet'}
+                  {inv.hosted.openedAt ? ` · Opened ${inv.hosted.openCount === 1 ? 'once' : `${inv.hosted.openCount} times`}, last ${dateLong(inv.hosted.openedAt)}` : inv.hosted.sentAt ? ' · Not opened yet' : ''}
+                </div>
+              </div>
+              <div className="ai3-actions">
+                <button className="ai3-btn small" onClick={() => { void navigator.clipboard?.writeText(inv.hosted!.url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}>{copied ? 'Copied' : 'Copy link'}</button>
+                <button className="ai3-btn small" disabled={busy} onClick={() => run(() => publish({ companyId, invoiceId: inv.id }), 'Online copy refreshed')}>Refresh copy</button>
+              </div>
+            </>
+          ) : inv.connected ? (
+            <>
+              <div><div style={{ fontWeight: 600 }}>Online copy</div><div className="ai3-note">Create a page on ai3.co your customer can open, with a link you can send or paste anywhere.</div></div>
+              <button className="ai3-btn small" disabled={busy} onClick={() => run(() => publish({ companyId, invoiceId: inv.id }), 'Online copy created')}>Create link</button>
+            </>
+          ) : (
+            <div className="ai3-note">Connect this company to ai3.co under Finance › Settings to send invoices by email and share a link.</div>
+          )}
+        </div>
+      )}
+      {sending && openStatus && (
+        <div className="ai3-card" style={{ marginTop: 12 }}>
+          <h3>Send {inv.number}</h3>
+          <div className="ai3-form-row">
+            <Field label="To"><input className="ai3-input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="customer@example.com" /></Field>
+            <Field label="Cc (optional)"><input className="ai3-input" value={sendCc} onChange={(e) => setSendCc(e.target.value)} /></Field>
+            <Field label="Message (optional)" style={{ gridColumn: 'span 3' }}><textarea className="ai3-input" rows={3} value={sendMsg} onChange={(e) => setSendMsg(e.target.value)} placeholder={`Hi ${inv.customerName}, please find invoice ${inv.number} attached. Thank you.`} /></Field>
+          </div>
+          <div className="ai3-actions">
+            <button className="ai3-btn primary" disabled={busy || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(sendTo)} onClick={async () => { const ok = await run(() => send({ companyId, invoiceId: inv.id, to: sendTo.trim(), cc: sendCc.trim() || null, message: sendMsg.trim() || null }), `${inv.number} sent to ${sendTo.trim()}`); if (ok) { setSending(false); setSendMsg(''); } }}>Send email</button>
+            <button className="ai3-btn" onClick={() => setSending(false)}>Cancel</button>
+          </div>
+          <p className="ai3-note">{inv.sender ? `Goes from ${inv.sender.email} via ${inv.sender.via === 'gmail' ? 'your Gmail, so replies land in your inbox' : 'ai3.co'}.` : 'Goes from ai3.co on your behalf.'} The email carries the invoice and a link to the online copy; opens are recorded here.</p>
+        </div>
+      )}
       {showDoc && full.data && <InvoiceDocument inv={full.data} settings={company.data?.settings ?? null} companyName={company.data?.name ?? ''} />}
       {inv.status === 'draft' && available.length > 0 && (
         <div style={{ marginTop: 12 }}>
@@ -964,7 +1017,9 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
   const { run, busy } = useRun([data.refresh]);
   const [form, setForm] = useState<Settings | null>(null);
   const [adding, setAdding] = useState(false);
-  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null };
+  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null };
+  const connected = Boolean(data.data?.settings.ai3Key);
+  const [showKey, setShowKey] = useState(false);
   const setField = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...s, [k]: e.target.value });
   const methods = data.data?.paymentMethods ?? [];
   return (
@@ -997,6 +1052,26 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
             <button className="ai3-btn" disabled={busy || !form || form.baseCurrency === data.data?.settings.baseCurrency} onClick={() => run(async () => { await update({ companyId, baseCurrency: s.baseCurrency }); setForm(null); }, 'Base currency saved')}>Save currency</button>
           </div>
           <p className="ai3-note">Change this before anything is posted. It does not convert existing entries.</p>
+        </div>
+      </div>
+      <div className="ai3-card" style={{ marginTop: 14 }}>
+        <div className="ai3-toolbar">
+          <h3 style={{ margin: 0 }}>Sending invoices <span className="ctx">online copies on ai3.co and email</span></h3>
+          <span className={`ai3-badge ${connected ? 'paid' : 'draft'}`}>{connected ? 'Connected to ai3.co' : 'Not connected'}</span>
+        </div>
+        <p className="ai3-note" style={{ marginTop: 0 }}>Each issued invoice gets a page at ai3.co with a link you can email or paste anywhere. Emails go from the Google account that owns this company, so replies land in your inbox. Companies set up through ai3.co are connected already; the key is under the company on ai3.co/companies.</p>
+        <div className="ai3-form-row">
+          <Field label="Company key" style={{ gridColumn: 'span 2' }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input className="ai3-input" type={showKey ? 'text' : 'password'} value={s.ai3Key ?? ''} onChange={setField('ai3Key')} placeholder="ai3k_…" autoComplete="off" />
+              <button className="ai3-btn small" type="button" onClick={() => setShowKey((v) => !v)}>{showKey ? 'Hide' : 'Show'}</button>
+            </div>
+          </Field>
+          <Field label="Reply-to (optional)"><input className="ai3-input" value={s.replyTo ?? ''} onChange={setField('replyTo')} placeholder={s.email ?? 'billing@…'} /></Field>
+        </div>
+        <div className="ai3-actions">
+          <button className="ai3-btn primary" disabled={busy || !form} onClick={() => run(async () => { await update({ companyId, ai3Key: s.ai3Key ?? '', ai3Origin: s.ai3Origin || 'https://ai3.co', replyTo: s.replyTo ?? '' }); setForm(null); }, connected || s.ai3Key ? 'Connection saved' : 'Disconnected')}>Save</button>
+          {connected && <button className="ai3-btn" disabled={busy} onClick={() => run(async () => { await update({ companyId, ai3Key: '', replyTo: s.replyTo ?? '' }); setForm(null); }, 'Disconnected')}>Disconnect</button>}
         </div>
       </div>
       <div className="ai3-card" style={{ marginTop: 14 }}>

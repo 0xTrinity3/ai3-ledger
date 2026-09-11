@@ -62,6 +62,9 @@ import {
   updatePaymentMethod,
   setInvoicePaymentMethods,
   getRate,
+  setInvoiceHosted,
+  markInvoiceSent,
+  markInvoiceOpened,
   type PaymentKind,
   type Decision,
   type BankKind,
@@ -70,6 +73,7 @@ import {
   type SweepResult,
 } from '../core/index.js';
 import { paperclipCostSource } from './cost-source.js';
+import { Ai3Error, hostedStatus, isConnected, publishInvoice, revokeInvoice, sendInvoice } from './ai3.js';
 
 const CURRENCY = 'USD';
 const SWEEP_JOB = 'sweep';
@@ -397,11 +401,24 @@ const plugin = definePlugin({
       const companyId = await companyOf(params);
       return { companyId, customers: await listCustomers(ledger(), companyId) };
     });
+    const httpFetch = (url: string, init?: RequestInit) => context.http.fetch(url, init);
     context.data.register('invoice', async (params) => {
       const companyId = await companyOf(params);
-      const inv = await getInvoice(ledger(), companyId, String(params['invoiceId'] ?? ''));
+      let inv = await getInvoice(ledger(), companyId, String(params['invoiceId'] ?? ''));
       if (!inv) throw new Error('Invoice not found');
-      return inv;
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      let sender: { email: string; via: string } | null | undefined;
+      if (inv.hosted && isConnected(settings)) {
+        try {
+          const st = await hostedStatus(httpFetch, settings, companyId, inv.hosted.token);
+          sender = st.sender ?? null;
+          if (st.openedAt && (!inv.hosted.openedAt || st.openCount !== inv.hosted.openCount)) {
+            await markInvoiceOpened(ledger(), companyId, inv.id, st.openedAt, st.openCount);
+            inv = (await getInvoice(ledger(), companyId, inv.id)) ?? inv;
+          }
+        } catch { /* offline: show what we have */ }
+      }
+      return { ...inv, connected: isConnected(settings), sender: sender ?? null };
     });
     // Who the company is, for report headers. Cached for the worker's life.
     const companyNames = new Map<string, string>();
@@ -545,7 +562,16 @@ const plugin = definePlugin({
     });
     context.actions.register('invoice.issue', async (params, ctx) => {
       const by = boardOnly(ctx);
-      return issueInvoice(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { createdBy: by, ...(s(params['issuedAt']) ? { issuedAt: s(params['issuedAt'])! } : {}) });
+      const companyId = await companyOf(params);
+      const inv = await issueInvoice(ledger(), companyId, String(params['invoiceId'] ?? ''), { createdBy: by, ...(s(params['issuedAt']) ? { issuedAt: s(params['issuedAt'])! } : {}) });
+      // A connected company gets its page the moment the invoice is issued.
+      try {
+        const settings = await getSettings(ledger(), companyId, CURRENCY);
+        if (isConnected(settings) && !inv.hosted) await publish(companyId, inv.id);
+      } catch (err) {
+        context.logger.warn('ledger: hosted page not created', { invoiceId: inv.id, error: err instanceof Error ? err.message : String(err) });
+      }
+      return (await getInvoice(ledger(), companyId, inv.id)) ?? inv;
     });
     context.actions.register('invoice.payment', async (params, ctx) => {
       const by = boardOnly(ctx);
@@ -574,7 +600,49 @@ const plugin = definePlugin({
         ...(params['email'] !== undefined ? { email: pick('email') ?? null } : {}),
         ...(params['taxId'] !== undefined ? { taxId: pick('taxId') ?? null } : {}),
         ...(params['invoiceFooter'] !== undefined ? { invoiceFooter: pick('invoiceFooter') ?? null } : {}),
+        ...(params['replyTo'] !== undefined ? { replyTo: pick('replyTo') ?? null } : {}),
+        ...(params['ai3Key'] !== undefined ? { ai3Key: pick('ai3Key') ?? null } : {}),
+        ...(params['ai3Origin'] !== undefined ? { ai3Origin: pick('ai3Origin') ?? null } : {}),
       });
+    });
+    // Hosted invoice pages on ai3.co and sending
+    const publish = async (companyId: string, invoiceId: string) => {
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      if (!isConnected(settings)) throw new Ai3Error('Not connected to ai3.co. Add the company key under Finance › Settings.');
+      const inv = await getInvoice(ledger(), companyId, invoiceId);
+      if (!inv) throw new Error('Invoice not found');
+      if (inv.status === 'draft' || inv.status === 'void') throw new Error('Issue the invoice before publishing it');
+      if (!companyNames.has(companyId)) {
+        for (const c of await context.companies.list({ limit: 500 })) companyNames.set(c.id, c.name);
+      }
+      const r = await publishInvoice(httpFetch, settings, inv, companyNames.get(companyId) ?? 'Company');
+      await setInvoiceHosted(ledger(), companyId, invoiceId, r);
+      return { ...r, settings };
+    };
+    context.actions.register('invoice.publish', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const r = await publish(companyId, String(params['invoiceId'] ?? ''));
+      return { token: r.token, url: r.url };
+    });
+    context.actions.register('invoice.send', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const invoiceId = String(params['invoiceId'] ?? '');
+      const to = String(params['to'] ?? '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to)) throw new Error('A valid recipient email is required');
+      const r = await publish(companyId, invoiceId);
+      const sent = await sendInvoice(httpFetch, r.settings, { companyId, token: r.token, to, cc: s(params['cc']) ?? null, subject: s(params['subject']) ?? null, message: s(params['message']) ?? null, replyTo: r.settings.replyTo ?? r.settings.email ?? null });
+      await markInvoiceSent(ledger(), companyId, invoiceId, to);
+      return { ...sent, url: r.url };
+    });
+    context.actions.register('invoice.revoke-link', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const inv = await getInvoice(ledger(), companyId, String(params['invoiceId'] ?? ''));
+      if (!inv?.hosted) throw new Error('This invoice has no hosted page');
+      await revokeInvoice(httpFetch, await getSettings(ledger(), companyId, CURRENCY), companyId, inv.hosted.token);
+      return { ok: true };
     });
     context.actions.register('payment-method.create', async (params, ctx) => {
       boardOnly(ctx);

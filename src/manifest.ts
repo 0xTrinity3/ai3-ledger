@@ -11,7 +11,7 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.7.0',
+  version: '0.8.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',

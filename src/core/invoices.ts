@@ -80,6 +80,7 @@ export interface Invoice {
   outstandingMinor: string;
   paymentMethods: PaymentInstruction[];
   notes: string | null;
+  hosted: { token: string; url: string; hostedAt: string | null; sentAt: string | null; sentTo: string | null; openedAt: string | null; openCount: number } | null;
   subject: Subject;
   createdBy: string;
   createdAt: string;
@@ -292,6 +293,13 @@ interface InvoiceRow {
   paid_minor: unknown;
   payment_methods: unknown;
   notes: string | null;
+  hosted_token: string | null;
+  hosted_url: string | null;
+  hosted_at: string | null;
+  sent_at: string | null;
+  sent_to: string | null;
+  opened_at: string | null;
+  open_count: unknown;
   subject_work_ref: string | null;
   subject_goal_ref: string | null;
   subject_agent_ref: string | null;
@@ -303,6 +311,7 @@ const INVOICE_SELECT = (db: LedgerDb) => `
   SELECT i.id, i.public_id, i.company_id, i.customer_id, c.name AS customer_name, c.email AS customer_email, i.number, i.status, i.currency,
          i.base_currency, i.rate_to_base::text AS rate_to_base,
          i.issued_at::text AS issued_at, i.due_at::text AS due_at, i.total_minor, i.base_total_minor, i.payment_methods, i.notes,
+         i.hosted_token, i.hosted_url, i.hosted_at::text AS hosted_at, i.sent_at::text AS sent_at, i.sent_to, i.opened_at::text AS opened_at, i.open_count,
          i.subject_work_ref, i.subject_goal_ref, i.subject_agent_ref, i.created_by, i.created_at::text AS created_at,
          COALESCE((SELECT SUM(p.amount_minor) FROM ${table(db, 'invoice_payments')} p WHERE p.invoice_id = i.id AND p.transaction_id IS NOT NULL), 0) AS paid_minor
     FROM ${table(db, 'invoices')} i JOIN ${table(db, 'customers')} c ON c.id = i.customer_id`;
@@ -368,6 +377,7 @@ function invoiceFromRow(r: InvoiceRow, lines: InvoiceLine[], payments: InvoicePa
     outstandingMinor: fromMinor(outstanding < 0n ? 0n : outstanding),
     paymentMethods: Array.isArray(methods) ? methods : [],
     notes: r.notes,
+    hosted: r.hosted_token && r.hosted_url ? { token: r.hosted_token, url: r.hosted_url, hostedAt: r.hosted_at, sentAt: r.sent_at, sentTo: r.sent_to, openedAt: r.opened_at, openCount: Number(r.open_count ?? 0) } : null,
     subject: {
       ...(r.subject_agent_ref ? { agent: r.subject_agent_ref } : {}),
       ...(r.subject_goal_ref ? { goal: r.subject_goal_ref } : {}),
@@ -550,6 +560,19 @@ export async function voidInvoice(db: LedgerDb, companyId: string, id: string): 
   if (inv.status !== 'draft') throw new LedgerError(`only a draft can be voided; ${inv.number} is ${inv.status}`, 'invalid');
   await setStatus(db, companyId, id, ['draft'], 'void');
   return (await getInvoice(db, companyId, id)) ?? { ...inv, status: 'void' };
+}
+
+/** Record where the invoice is hosted. */
+export async function setInvoiceHosted(db: LedgerDb, companyId: string, id: string, hosted: { token: string; url: string }): Promise<void> {
+  await db.sql.execute(`UPDATE ${table(db, 'invoices')} SET hosted_token = $3, hosted_url = $4, hosted_at = COALESCE(hosted_at, now()) WHERE company_id = $1 AND id = $2::uuid`, [companyId, id, hosted.token, hosted.url]);
+}
+
+export async function markInvoiceSent(db: LedgerDb, companyId: string, id: string, to: string): Promise<void> {
+  await db.sql.execute(`UPDATE ${table(db, 'invoices')} SET sent_at = now(), sent_to = $3 WHERE company_id = $1 AND id = $2::uuid`, [companyId, id, to.slice(0, 500)]);
+}
+
+export async function markInvoiceOpened(db: LedgerDb, companyId: string, id: string, openedAt: string, openCount: number): Promise<void> {
+  await db.sql.execute(`UPDATE ${table(db, 'invoices')} SET opened_at = COALESCE(opened_at, $3::timestamptz), open_count = $4::int WHERE company_id = $1 AND id = $2::uuid`, [companyId, id, openedAt, openCount]);
 }
 
 /** Sum of what is outstanding on issued and part-paid invoices, in base currency at the issue rates. */
