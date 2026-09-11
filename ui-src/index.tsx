@@ -11,6 +11,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   useHostContext,
+  useHostLocation,
   useHostNavigation,
   usePluginAction,
   usePluginData,
@@ -135,9 +136,9 @@ const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid rgba
 const btn: React.CSSProperties = { padding: '6px 12px', border: '1px solid rgba(127,127,127,.4)', borderRadius: 6, background: 'transparent', color: 'inherit', cursor: 'pointer' };
 const btnPrimary: React.CSSProperties = { ...btn, background: 'rgba(11,110,79,.9)', borderColor: 'transparent', color: '#fff' };
 
-function Section({ title, children, right }: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
+function Section({ title, children, right, style }: { title: string; children: React.ReactNode; right?: React.ReactNode; style?: React.CSSProperties }) {
   return (
-    <section style={{ marginBottom: 20 }}>
+    <section style={{ marginBottom: 20, ...(style ?? {}) }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{title}</h3>
         {right}
@@ -463,8 +464,9 @@ function StatementsTab({ companyId }: { companyId: string }) {
 
   const list = periods.data?.periods ?? [];
   const selected = list.find((p) => p.id === periodId);
+  const balanceFirst = useHostLocation().search.includes('view=balance');
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
       <Failure error={periods.error ?? pnl.error ?? sheet.error} />
       <Section
         title="Profit and loss"
@@ -520,6 +522,7 @@ function StatementsTab({ companyId }: { companyId: string }) {
 
       <Section
         title="Balance sheet"
+        style={{ order: balanceFirst ? -1 : 0 }}
         right={<input type="date" style={input} value={asOf} onChange={(e) => setAsOf(e.target.value)} />}
       >
         {sheet.loading && !sheet.data ? (
@@ -556,13 +559,25 @@ function StatementsTab({ companyId }: { companyId: string }) {
 // Page + sidebar
 // ---------------------------------------------------------------------------
 
-const TABS = ['Position', 'Transactions', 'Invoices', 'Statements'] as const;
+// The tab is part of the URL (?tab=…) so the sidebar can deep-link into the
+// page and the browser back button behaves.
+const TABS = ['position', 'transactions', 'invoices', 'statements'] as const;
+type Tab = (typeof TABS)[number];
+const TAB_LABEL: Record<Tab, string> = { position: 'Position', transactions: 'Transactions', invoices: 'Invoices', statements: 'Statements' };
+
+function tabFromSearch(search: string): Tab {
+  const t = new URLSearchParams(search).get('tab');
+  return (TABS as readonly string[]).includes(t ?? '') ? (t as Tab) : 'position';
+}
 
 export function LedgerPage(_props: PluginPageProps) {
   const context = useHostContext();
-  const [tab, setTab] = useState<(typeof TABS)[number]>('Position');
+  const location = useHostLocation();
+  const nav = useHostNavigation();
+  const tab = tabFromSearch(location.search);
   const companyId = context.companyId;
   if (!companyId) return <div style={{ padding: 16 }}>Pick a company to see its ledger.</div>;
+  const go = (t: Tab) => nav.navigate(t === 'position' ? '/ledger' : `/ledger?tab=${t}`, { replace: true });
   return (
     <ErrorBoundary>
       <div style={{ padding: 16, maxWidth: 1100 }}>
@@ -572,29 +587,67 @@ export function LedgerPage(_props: PluginPageProps) {
             {TABS.map((t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() => go(t)}
                 style={{ ...btn, borderColor: tab === t ? 'rgba(11,110,79,.9)' : 'rgba(127,127,127,.3)', fontWeight: tab === t ? 600 : 400 }}
               >
-                {t}
+                {TAB_LABEL[t]}
               </button>
             ))}
           </nav>
         </div>
-        {tab === 'Position' && <PositionTab companyId={companyId} />}
-        {tab === 'Transactions' && <TransactionsTab companyId={companyId} />}
-        {tab === 'Invoices' && <InvoicesTab companyId={companyId} />}
-        {tab === 'Statements' && <StatementsTab companyId={companyId} />}
+        {tab === 'position' && <PositionTab companyId={companyId} />}
+        {tab === 'transactions' && <TransactionsTab companyId={companyId} />}
+        {tab === 'invoices' && <InvoicesTab companyId={companyId} />}
+        {tab === 'statements' && <StatementsTab companyId={companyId} />}
         <p style={{ fontSize: 11, opacity: 0.55, marginTop: 24 }}>AI3 Ledger · double-entry, append-only, integer minor units. Costs come from Paperclip; nothing here is re-derived.</p>
       </div>
     </ErrorBoundary>
   );
 }
 
+/**
+ * A "Finance" group in Paperclip's sidebar: the ledger's views as entries,
+ * and Paperclip's own Costs page alongside them, since that is where the
+ * figures come from. Styled to sit with the host's own groups.
+ */
+const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, search: string) => boolean }> = [
+  { label: 'Position', to: '/ledger', match: (p, s) => p.endsWith('/ledger') && !new URLSearchParams(s).get('tab') },
+  { label: 'Transactions', to: '/ledger?tab=transactions', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'transactions' },
+  { label: 'Invoices', to: '/ledger?tab=invoices', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'invoices' },
+  { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') },
+  { label: 'Balance sheet', to: '/ledger?tab=statements&view=balance', match: (p, s) => p.endsWith('/ledger') && s.includes('view=balance') },
+  { label: 'Costs', to: '/costs', match: (p) => p.endsWith('/costs') },
+];
+
 export function LedgerSidebarItem(_props: PluginSidebarProps) {
   const nav = useHostNavigation();
+  const location = useHostLocation();
+  const groupLabel: React.CSSProperties = { fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', opacity: 0.55, padding: '14px 12px 4px', fontWeight: 500 };
   return (
-    <a {...nav.linkProps('/ledger')} style={{ display: 'block', padding: '6px 10px', textDecoration: 'none', color: 'inherit' }}>
-      Ledger
-    </a>
+    <div>
+      <div style={groupLabel}>Finance</div>
+      {FINANCE_ITEMS.map((item) => {
+        const active = item.match(location.pathname, location.search);
+        return (
+          <a
+            key={item.label}
+            {...nav.linkProps(item.to)}
+            style={{
+              display: 'block',
+              padding: '6px 12px',
+              margin: '1px 6px',
+              borderRadius: 6,
+              textDecoration: 'none',
+              color: 'inherit',
+              fontSize: 14,
+              fontWeight: active ? 600 : 400,
+              background: active ? 'rgba(127,127,127,.14)' : 'transparent',
+            }}
+          >
+            {item.label}
+          </a>
+        );
+      })}
+    </div>
   );
 }

@@ -34,7 +34,7 @@ const manifest: PaperclipPluginManifestV1 = {
   ui: {
     slots: [
       { type: 'page', id: 'ledger-page', displayName: 'Ledger', exportName: 'LedgerPage', routePath: 'ledger', order: 10 },
-      { type: 'sidebar', id: 'ledger-nav', displayName: 'Ledger', exportName: 'LedgerSidebarItem', order: 10 },
+      { type: 'sidebar', id: 'finance-nav', displayName: 'Finance', exportName: 'LedgerSidebarItem', order: 10 },
     ],
   },
   database: {
