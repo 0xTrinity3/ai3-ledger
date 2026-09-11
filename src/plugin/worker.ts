@@ -75,6 +75,7 @@ import {
 import { paperclipCostSource } from './cost-source.js';
 import { Ai3Error, hostedStatus, isConnected, publishInvoice, revokeInvoice, sendInvoice } from './ai3.js';
 import { TOOL_DECLARATIONS, runTool } from './tools.js';
+import { LEDGER_SKILL_KEY } from './skill.js';
 import { buildBriefing } from './briefing.js';
 
 const CURRENCY = 'USD';
@@ -95,6 +96,29 @@ async function sweepCompany(companyId: string): Promise<SweepResult> {
   return sweepCosts(l, paperclipCostSource(l.sql), companyId, { currency: CURRENCY });
 }
 
+const moduleCompanyNames = new Map<string, string>();
+async function companyNameOf(companyId: string): Promise<string> {
+  if (ctx && !moduleCompanyNames.has(companyId)) {
+    for (const c of await ctx.companies.list({ limit: 500 })) moduleCompanyNames.set(c.id, c.name);
+  }
+  return moduleCompanyNames.get(companyId) ?? 'Company';
+}
+
+// Companies whose skills library already holds the ledger skill this worker
+// life. Reconcile is idempotent on the host; this just saves the calls.
+const skillSynced = new Set<string>();
+async function syncSkill(companyId: string): Promise<void> {
+  const c = ctx;
+  if (!c || skillSynced.has(companyId)) return;
+  try {
+    const r = await c.skills.managed.reconcile(LEDGER_SKILL_KEY, companyId);
+    skillSynced.add(companyId);
+    if (r.status === 'created' || r.status === 'relinked') c.logger.info('ledger: skill installed', { companyId, status: r.status });
+  } catch (err) {
+    c.logger.warn('ledger: skill not installed', { companyId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function sweepAll(): Promise<void> {
   const c = ctx;
   if (!c) return;
@@ -104,6 +128,7 @@ async function sweepAll(): Promise<void> {
   if (removed > 0) c.logger.warn('ledger: removed stale pending transactions', { removed });
   const companies = await c.companies.list({ limit: 500 });
   for (const company of companies) {
+    await syncSkill(company.id);
     try {
       const r = await sweepCompany(company.id);
       results.push(r);
@@ -357,6 +382,26 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
       case 'reports.balance-sheet': {
         const asOf = str(input.query['asOf']);
         return json(200, await balanceSheet(l, companyId, asOf ?? new Date()));
+      }
+      // M6: the agent tools over HTTP, same functions as the gateway tools.
+      case 'tools.list':
+        return json(200, { tools: TOOL_DECLARATIONS.map((t) => ({ name: t.name, displayName: t.displayName, description: t.description, parametersSchema: t.parametersSchema })) });
+      case 'tools.invoke': {
+        const name = String(input.params['name'] ?? '');
+        if (!TOOL_DECLARATIONS.some((t) => t.name === name)) return bad(`Unknown tool ${name}`, 404);
+        const c = ctx;
+        if (!c) return bad('worker not ready', 503);
+        const { companyId: _ignored, ...params } = body;
+        const actor = input.actor.actorType === 'agent' && input.actor.agentId ? input.actor.agentId : `board:${input.actor.userId ?? 'user'}`;
+        const started = Date.now();
+        const result = await runTool(
+          { db: l, fetch: (url, init) => c.http.fetch(url, init), companyName: companyNameOf, baseCurrency: CURRENCY },
+          name,
+          params,
+          { agentId: actor, runId: '', companyId, projectId: '' },
+        );
+        c.logger.info('ledger: tool', { tool: name, via: 'http', actor, companyId, ms: Date.now() - started, ...(result.error ? { error: result.error } : {}) });
+        return json(result.error ? 400 : 200, result);
       }
       case 'invoices.void': {
         if (!board) return bad('Only the board can void an invoice', 403);

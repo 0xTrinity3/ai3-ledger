@@ -1,5 +1,6 @@
 import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 import { TOOL_DECLARATIONS } from './plugin/tools.js';
+import { LEDGER_SKILL } from './plugin/skill.js';
 
 /**
  * Paperclip plugin manifest. Loaded by the host as a JS module (dist/manifest.js).
@@ -32,6 +33,7 @@ const manifest: PaperclipPluginManifestV1 = {
     'issues.read',
     'issues.create',
     'issues.update',
+    'skills.managed',
   ],
   entrypoints: {
     worker: 'dist/plugin/worker.js',
@@ -91,7 +93,15 @@ const manifest: PaperclipPluginManifestV1 = {
     { routeKey: 'periods.close', method: 'POST', path: '/periods/:id/close', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'reports.pnl', method: 'GET', path: '/reports/pnl', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'reports.balance-sheet', method: 'GET', path: '/reports/balance-sheet', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    // M6: the agent tools over plain HTTP, for runs without an MCP gateway. Same
+    // functions as the tool declarations; the company skill explains the call.
+    { routeKey: 'tools.list', method: 'GET', path: '/tools', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'tools.invoke', method: 'POST', path: '/tools/:name', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
   ],
+  // The company skill that teaches agents the routes above. Reconciled into
+  // each company's skills library by the worker; Paperclip delivers every
+  // company skill to every agent run.
+  skills: [LEDGER_SKILL],
   // M6: what an agent in the company can do with the books. Exposed by the
   // host through its tool gateway as ai3.ledger:<name>.
   tools: TOOL_DECLARATIONS,

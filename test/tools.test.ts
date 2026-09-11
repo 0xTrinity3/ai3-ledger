@@ -9,6 +9,7 @@ import { createBankAccount, importStatementLines, seedAccounts, updateSettings, 
 import { TOOL_DECLARATIONS, majorToMinor, minorToMajor, runTool, type ToolDeps } from '../src/plugin/tools.js';
 import { buildBriefing } from '../src/plugin/briefing.js';
 import manifest from '../src/manifest.js';
+import { LEDGER_SKILL, ledgerSkillMarkdown } from '../src/plugin/skill.js';
 
 const CO = '88888888-8888-4888-8888-888888888888';
 const RUN = { agentId: 'agent-1', runId: 'run-1', companyId: CO, projectId: 'proj-1' };
@@ -60,6 +61,12 @@ describe('manifest', () => {
       // Paperclip infers "destructive" from these words and would demand approval; the board chose no gate.
       expect(t.name).not.toMatch(/delete|destroy|remove|drop|truncate|wipe|purge/);
     }
+    expect(manifest.apiRoutes?.some((r) => r.routeKey === 'tools.invoke' && r.auth === 'board-or-agent' && r.path === '/tools/:name')).toBe(true);
+    expect(manifest.capabilities).toContain('skills.managed');
+    expect(manifest.skills?.[0]).toBe(LEDGER_SKILL);
+    const md = ledgerSkillMarkdown();
+    for (const t of TOOL_DECLARATIONS) expect(md).toContain(`### ${t.name}`);
+    expect(md).toContain('/api/plugins/ai3.ledger/api/tools/');
     expect(TOOL_DECLARATIONS.map((t) => t.name)).toEqual([
       'position', 'invoices', 'invoice', 'customers', 'create-invoice', 'send-invoice', 'record-payment', 'void-invoice', 'write-off-invoice',
       'bank-accounts', 'reconcile-queue', 'reconcile', 'reconcile-all', 'profit-and-loss', 'balance-sheet',
