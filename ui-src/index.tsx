@@ -197,7 +197,7 @@ const AMOUNT = /^\d+(\.\d{1,2})?$/;
 // Data shapes (loose mirrors of the worker's JSON)
 // ---------------------------------------------------------------------------
 
-interface Company { name: string; currency: string }
+interface Company { name: string; currency: string; settings?: Settings }
 interface Position {
   currency: string | null;
   treasuryMinor: string;
@@ -213,8 +213,11 @@ interface Entry { accountCode: string; accountName: string; direction: string; a
 interface Tx { id: string; occurredAt: string; description: string; sourceKind: string; sourceRef: string | null; entries: Entry[] }
 interface InvoiceLine { position: number; description: string; quantity: string; unitAmountMinor: string; amountMinor: string }
 interface Invoice {
-  id: string; number: string; status: string; customerName: string; customerId: string; currency: string;
-  issuedAt: string | null; dueAt: string | null; createdAt: string; totalMinor: string; paidMinor: string; outstandingMinor: string; lines: InvoiceLine[];
+  id: string; number: string; status: string; customerName: string; customerEmail: string | null; customerId: string; currency: string; baseCurrency: string; rateToBase: string;
+  issuedAt: string | null; dueAt: string | null; createdAt: string; totalMinor: string; baseTotalMinor: string; paidMinor: string; outstandingMinor: string; lines: InvoiceLine[];
+  paymentMethods: Array<{ id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails }>;
+  notes: string | null;
+  payments: Array<{ id: string; occurredAt: string; amountMinor: string; rateToBase: string; baseMinor: string; reference: string | null }>;
 }
 interface Customer { id: string; name: string; email: string | null }
 interface Period { id: string; label: string; startsOn: string; endsOn: string; status: 'open' | 'closed' }
@@ -558,10 +561,35 @@ function statusLabel(s: string): string {
   return { draft: 'Draft', issued: 'Awaiting payment', part_paid: 'Part paid', paid: 'Paid', written_off: 'Written off', void: 'Void' }[s] ?? s;
 }
 
+const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'SGD', 'JPY', 'USDC', 'USDT', 'DAI'];
+const NETWORKS = ['Base', 'Ethereum', 'Solana', 'Polygon', 'Arbitrum', 'Optimism', 'Bitcoin', 'Tron'];
+
+interface PaymentDetails { accountName?: string; bankName?: string; accountNumber?: string; iban?: string; sortCode?: string; routingNumber?: string; bic?: string; url?: string; network?: string; asset?: string; address?: string; instructions?: string }
+interface PaymentMethod { id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails; isDefault: boolean; enabled: boolean }
+interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null }
+
+const KIND_TITLE: Record<PaymentMethod['kind'], string> = { bank: 'Bank transfer', stripe: 'Pay online', crypto: 'Crypto', other: 'Other' };
+
+function PayLines({ m }: { m: { kind: PaymentMethod['kind']; label: string; currency: string | null; details: PaymentDetails } }) {
+  const d = m.details;
+  const row = (k: string, v?: string) => (v ? <div><span style={{ opacity: 0.65 }}>{k} </span><span style={{ fontVariantNumeric: 'tabular-nums', wordBreak: 'break-all' }}>{v}</span></div> : null);
+  return (
+    <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+      <div style={{ fontWeight: 600 }}>{m.label}{m.currency ? <span style={{ fontWeight: 400, opacity: 0.65 }}> · {m.currency}</span> : null}</div>
+      {m.kind === 'bank' && <>{row('Account name', d.accountName)}{row('Bank', d.bankName)}{row('Account', d.accountNumber)}{row('IBAN', d.iban)}{row('Sort code', d.sortCode)}{row('Routing', d.routingNumber)}{row('BIC', d.bic)}</>}
+      {m.kind === 'stripe' && d.url && <div><a href={d.url} target="_blank" rel="noreferrer">{d.url}</a></div>}
+      {m.kind === 'crypto' && <>{row('Send', d.asset)}{row('Network', d.network)}{row('To', d.address)}</>}
+      {m.kind === 'other' && d.instructions && <div style={{ whiteSpace: 'pre-wrap' }}>{d.instructions}</div>}
+    </div>
+  );
+}
+
 function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyId: string; customers: Customer[]; cur: string; onDone: () => void; onCancel: () => void }) {
   const createCustomer = usePluginAction('customer.create');
   const createInvoice = usePluginAction('invoice.create');
   const issue = usePluginAction('invoice.issue');
+  const methods = usePluginData<{ paymentMethods: PaymentMethod[] }>('payment-methods', { companyId, enabledOnly: true });
+  const nav = useHostNavigation();
   const { run, busy } = useRun([]);
   const [customerId, setCustomerId] = useState('');
   const [newCustomer, setNewCustomer] = useState(false);
@@ -569,7 +597,14 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
   const [custEmail, setCustEmail] = useState('');
   const [issueDate, setIssueDate] = useState(today());
   const [dueDate, setDueDate] = useState(plusDays(today(), 14));
+  const [currency, setCurrency] = useState(cur);
+  const [rate, setRate] = useState('');
+  const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([{ description: '', quantity: '1', unit: '' }]);
+  const [chosen, setChosen] = useState<Record<string, boolean> | null>(null);
+  const available = methods.data?.paymentMethods ?? [];
+  const picked = chosen ?? Object.fromEntries(available.map((m) => [m.id, m.isDefault]));
+  const foreign = currency !== cur;
   const lineTotal = (l: { quantity: string; unit: string }) => {
     if (!AMOUNT.test(l.unit.replace(/,/g, '')) || !/^\d+(\.\d+)?$/.test(l.quantity)) return 0n;
     const unit = BigInt(toMinor(l.unit.replace(/,/g, '')));
@@ -577,7 +612,9 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
     return (unit * BigInt(q4) + 5_000n) / 10_000n;
   };
   const total = lines.reduce((s, l) => s + lineTotal(l), 0n);
-  const valid = (customerId || (newCustomer && custName.trim())) && lines.every((l) => l.description.trim() && AMOUNT.test(l.unit.replace(/,/g, ''))) && total > 0n;
+  const rateOk = !foreign || /^\d+(\.\d{1,10})?$/.test(rate);
+  const valid = (customerId || (newCustomer && custName.trim())) && lines.every((l) => l.description.trim() && AMOUNT.test(l.unit.replace(/,/g, ''))) && total > 0n && rateOk;
+  const baseTotal = foreign && rateOk && rate ? (total * BigInt(Math.round(Number(rate) * 1e6)) + 500_000n) / 1_000_000n : total;
 
   async function save(thenIssue: boolean) {
     let cid = customerId;
@@ -587,7 +624,8 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
         cid = c.id;
       }
       const inv = (await createInvoice({
-        companyId, customerId: cid, dueAt: `${dueDate}T23:59:59.000Z`,
+        companyId, customerId: cid, dueAt: `${dueDate}T23:59:59.000Z`, currency, rateToBase: foreign ? rate : null, notes,
+        paymentMethodIds: available.filter((m) => picked[m.id]).map((m) => m.id),
         lines: lines.map((l) => ({ description: l.description, quantity: l.quantity || '1', unitAmountMinor: toMinor(l.unit.replace(/,/g, '')) })),
       })) as { id: string; number: string };
       if (thenIssue) await issue({ companyId, invoiceId: inv.id, issuedAt: `${issueDate}T12:00:00.000Z` });
@@ -620,11 +658,20 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
         {newCustomer && <Field label="Customer email"><input className="ai3-input" placeholder="accounts@customer.com" value={custEmail} onChange={(e) => setCustEmail(e.target.value)} /></Field>}
         <Field label="Issue date"><input className="ai3-input" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} /></Field>
         <Field label="Due date"><input className="ai3-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
+        <Field label="Currency">
+          <select className="ai3-select" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            {[cur, ...CURRENCIES.filter((c) => c !== cur)].map((c) => <option key={c} value={c}>{c}{c === cur ? ' (base)' : ''}</option>)}
+          </select>
+        </Field>
+        {foreign && (
+          <Field label={`Rate: 1 ${currency} = ? ${cur}`}>
+            <input className="ai3-input" placeholder="1.0850" value={rate} inputMode="decimal" onChange={(e) => setRate(e.target.value)} />
+          </Field>
+        )}
         <Field label="Invoice number"><input className="ai3-input" value="Assigned on save" disabled /></Field>
-        <Field label="Currency"><input className="ai3-input" value={cur} disabled /></Field>
       </div>
       <table className="ai3-table ai3-lines">
-        <thead><tr><th style={{ width: '50%' }}>Description</th><th style={{ width: 90 }}>Qty</th><th style={{ width: 140 }}>Price</th><th className="num" style={{ width: 140 }}>Amount {cur}</th><th style={{ width: 40 }}></th></tr></thead>
+        <thead><tr><th style={{ width: '50%' }}>Description</th><th style={{ width: 90 }}>Qty</th><th style={{ width: 140 }}>Price</th><th className="num" style={{ width: 140 }}>Amount {currency}</th><th style={{ width: 40 }}></th></tr></thead>
         <tbody>
           {lines.map((l, i) => (
             <tr key={i}>
@@ -642,28 +689,120 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
         <table>
           <tbody>
             <tr><td>Subtotal</td><td>{fmt(total, { symbol: false })}</td></tr>
-            <tr className="total"><td>Total {cur}</td><td>{fmt(total, { symbol: false })}</td></tr>
+            <tr className="total"><td>Total {currency}</td><td>{fmt(total, { symbol: false })}</td></tr>
+            {foreign && rate && rateOk && <tr><td style={{ fontWeight: 400, opacity: 0.7 }}>Booked as {cur}</td><td style={{ fontWeight: 400, opacity: 0.7 }}>{fmt(baseTotal, { symbol: false })}</td></tr>}
           </tbody>
         </table>
       </div>
-      <p className="ai3-note">Saving as draft changes nothing in the books. Issuing books the receivable and the income on the issue date.</p>
+      <div className="ai3-grid two" style={{ marginTop: 14 }}>
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>How to pay <span className="ai3-cap" style={{ display: 'inline' }}>· printed on the invoice</span></div>
+          {available.length === 0 ? (
+            <p className="ai3-note" style={{ marginTop: 0 }}>No payment options saved yet. <a {...nav.linkProps('/ledger?tab=settings')}>Add a bank account, a Stripe link or a wallet</a> and they will appear here.</p>
+          ) : (
+            available.map((m) => (
+              <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', cursor: 'pointer' }}>
+                <input type="checkbox" checked={Boolean(picked[m.id])} onChange={(e) => setChosen({ ...picked, [m.id]: e.target.checked })} style={{ marginTop: 3 }} />
+                <span><strong>{m.label}</strong> <span className="ai3-cap" style={{ display: 'inline' }}>· {KIND_TITLE[m.kind]}{m.kind === 'crypto' ? ` · ${m.details.asset} on ${m.details.network}` : ''}{m.currency ? ` · ${m.currency}` : ''}</span></span>
+              </label>
+            ))
+          )}
+        </div>
+        <Field label="Notes on the invoice"><textarea className="ai3-input" rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Payment terms, a thank-you, a purchase order number…" /></Field>
+      </div>
+      <p className="ai3-note">Saving as draft changes nothing in the books. Issuing books the receivable and the income on the issue date{foreign ? `, in ${cur} at the rate you set` : ''}.</p>
+    </div>
+  );
+}
+
+function InvoiceDocument({ inv, settings, companyName }: { inv: Invoice; settings: Settings | null; companyName: string }) {
+  const outstanding = BigInt(inv.outstandingMinor);
+  return (
+    <div className="ai3-report ai3-invoice-doc" style={{ marginBottom: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '.02em' }}>INVOICE</div>
+          <div style={{ marginTop: 6, fontSize: 13 }}>
+            <div><span style={{ opacity: 0.65 }}>Number</span> {inv.number}</div>
+            <div><span style={{ opacity: 0.65 }}>Issued</span> {inv.issuedAt ? dateLong(inv.issuedAt) : 'not yet'}</div>
+            <div><span style={{ opacity: 0.65 }}>Due</span> {dateLong(inv.dueAt)}</div>
+            <div><span style={{ opacity: 0.65 }}>Currency</span> {inv.currency}{inv.currency !== inv.baseCurrency ? ` (1 ${inv.currency} = ${inv.rateToBase} ${inv.baseCurrency})` : ''}</div>
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', fontSize: 13 }}>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{settings?.legalName || companyName}</div>
+          {settings?.address && <div style={{ whiteSpace: 'pre-line', opacity: 0.8 }}>{settings.address}</div>}
+          {settings?.email && <div style={{ opacity: 0.8 }}>{settings.email}</div>}
+          {settings?.taxId && <div style={{ opacity: 0.8 }}>Tax ID {settings.taxId}</div>}
+        </div>
+      </div>
+      <div style={{ marginTop: 18, fontSize: 13 }}>
+        <div style={{ opacity: 0.65, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.06em' }}>Bill to</div>
+        <div style={{ fontWeight: 600 }}>{inv.customerName}</div>
+        {inv.customerEmail && <div style={{ opacity: 0.8 }}>{inv.customerEmail}</div>}
+      </div>
+      <table className="ai3-table" style={{ marginTop: 18 }}>
+        <thead><tr><th>Description</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Amount {inv.currency}</th></tr></thead>
+        <tbody>
+          {inv.lines.map((l) => (
+            <tr key={l.position}><td>{l.description}</td><td className="num">{Number(l.quantity)}</td><td className="num">{fmt(l.unitAmountMinor, { symbol: false })}</td><td className="num">{fmt(l.amountMinor, { symbol: false })}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="ai3-totals">
+        <table>
+          <tbody>
+            <tr className="total"><td>Total {inv.currency}</td><td>{fmt(inv.totalMinor, { symbol: false })}</td></tr>
+            {BigInt(inv.paidMinor) > 0n && <tr><td>Paid</td><td>{fmt(inv.paidMinor, { symbol: false })}</td></tr>}
+            {(inv.status === 'issued' || inv.status === 'part_paid') && <tr className="total"><td>Amount due {inv.currency}</td><td>{fmt(outstanding, { symbol: false })}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {inv.paymentMethods.length > 0 && (
+        <div style={{ marginTop: 20, paddingTop: 14, borderTop: '1px solid var(--border, #ddd)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>How to pay</div>
+          <div className="ai3-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+            {inv.paymentMethods.map((m) => <div key={m.id} className="ai3-card" style={{ padding: '10px 12px' }}><PayLines m={m} /></div>)}
+          </div>
+          <p className="ai3-note">Please quote {inv.number} with your payment.</p>
+        </div>
+      )}
+      {inv.notes && <p style={{ marginTop: 16, whiteSpace: 'pre-wrap', fontSize: 13 }}>{inv.notes}</p>}
+      {settings?.invoiceFooter && <p className="ai3-note" style={{ marginTop: 16, whiteSpace: 'pre-wrap' }}>{settings.invoiceFooter}</p>}
     </div>
   );
 }
 
 function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: string; invoice: Invoice; cur: string; onChanged: () => void }) {
   const full = usePluginData<Invoice>('invoice', { companyId, invoiceId: invoice.id });
+  const company = usePluginData<Company & { settings?: Settings }>('company', { companyId });
+  const methods = usePluginData<{ paymentMethods: PaymentMethod[] }>('payment-methods', { companyId, enabledOnly: true });
   const issue = usePluginAction('invoice.issue');
   const pay = usePluginAction('invoice.payment');
   const writeOff = usePluginAction('invoice.writeoff');
   const voidIt = usePluginAction('invoice.void');
+  const setMethods = usePluginAction('invoice.set-payment-methods');
   const { run, busy } = useRun([full.refresh, onChanged]);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate] = useState(today());
   const [payRef, setPayRef] = useState('');
+  const [payRate, setPayRate] = useState('');
   const [issueDate, setIssueDate] = useState(today());
+  const [showDoc, setShowDoc] = useState(true);
   const inv = full.data ?? invoice;
   const openStatus = inv.status === 'issued' || inv.status === 'part_paid';
+  const foreign = inv.currency !== inv.baseCurrency;
+  const available = methods.data?.paymentMethods ?? [];
+  const printDoc = () => {
+    const el = document.querySelector('.ai3-invoice-doc');
+    if (!el) return;
+    const w = window.open('', '_blank', 'width=900,height=1100');
+    if (!w) return;
+    w.document.write(`<!doctype html><html><head><title>${inv.number}</title><style>body{font:14px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111;margin:40px auto;max-width:800px}.ai3-table{width:100%;border-collapse:collapse;font-size:13px}.ai3-table th{text-align:left;font-size:11px;color:#666;padding:6px 8px;border-bottom:1px solid #999}.ai3-table td{padding:8px;border-bottom:1px solid #ddd}.num{text-align:right}.ai3-totals{display:flex;justify-content:flex-end;margin-top:12px}.ai3-totals td{padding:4px 0 4px 32px;text-align:right}.ai3-totals tr.total td{font-weight:600;border-top:1px solid #999;font-size:16px}.ai3-card{border:1px solid #ddd;border-radius:6px;padding:10px 12px}.ai3-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.ai3-note{color:#666;font-size:12px}a{color:#1f6fcf}</style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 300);
+  };
   return (
     <div className="ai3-detail">
       <div className="ai3-toolbar">
@@ -672,9 +811,12 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
           <div className="ai3-note" style={{ marginTop: 4 }}>
             {inv.issuedAt ? `Issued ${dateLong(inv.issuedAt)}` : `Created ${dateLong(inv.createdAt)}`}{inv.dueAt ? ` · Due ${dateLong(inv.dueAt)}` : ''}
             {openStatus && inv.dueAt && inv.dueAt.slice(0, 10) < today() ? <span style={{ color: 'var(--ai3-red)' }}> · Overdue by {daysBetween(inv.dueAt, today())} days</span> : null}
+            {foreign ? ` · ${inv.currency} at ${inv.rateToBase} ${inv.baseCurrency}` : ''}
           </div>
         </div>
         <div className="ai3-actions">
+          <button className="ai3-btn" onClick={printDoc}>Print / PDF</button>
+          <button className="ai3-btn" onClick={() => setShowDoc((v) => !v)}>{showDoc ? 'Hide invoice' : 'Show invoice'}</button>
           {inv.status === 'draft' && (
             <>
               <input className="ai3-input" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} style={{ width: 160 }} />
@@ -682,36 +824,41 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
               <button className="ai3-btn danger" disabled={busy} onClick={() => run(() => voidIt({ companyId, invoiceId: inv.id }), `${inv.number} voided`)}>Void</button>
             </>
           )}
-          {openStatus && (
-            <button className="ai3-btn danger" disabled={busy} onClick={() => run(() => writeOff({ companyId, invoiceId: inv.id }), `${inv.number} written off`)}>Write off</button>
-          )}
+          {openStatus && <button className="ai3-btn danger" disabled={busy} onClick={() => run(() => writeOff({ companyId, invoiceId: inv.id }), `${inv.number} written off`)}>Write off</button>}
         </div>
       </div>
-      <table className="ai3-table" style={{ background: 'var(--card, #fff)', borderRadius: 8 }}>
-        <thead><tr><th>Description</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Amount</th></tr></thead>
-        <tbody>
-          {(full.data?.lines ?? []).map((l) => (
-            <tr key={l.position}><td>{l.description}</td><td className="num">{Number(l.quantity)}</td><td className="num">{fmt(l.unitAmountMinor, { symbol: false })}</td><td className="num">{fmt(l.amountMinor, { symbol: false })}</td></tr>
-          ))}
-          {!full.data && <tr><td colSpan={4} className="muted">Loading lines…</td></tr>}
-        </tbody>
-      </table>
-      <div className="ai3-totals">
-        <table>
-          <tbody>
-            <tr className="total"><td>Total {cur}</td><td>{fmt(inv.totalMinor, { symbol: false })}</td></tr>
-            {BigInt(inv.paidMinor) > 0n && <tr><td>Paid</td><td>{fmt(inv.paidMinor, { symbol: false })}</td></tr>}
-            {openStatus && <tr><td>Amount due</td><td>{fmt(inv.outstandingMinor, { symbol: false })}</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {showDoc && full.data && <InvoiceDocument inv={full.data} settings={company.data?.settings ?? null} companyName={company.data?.name ?? ''} />}
+      {inv.status === 'draft' && available.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Payment options on this draft</div>
+          {available.map((m) => {
+            const on = inv.paymentMethods.some((p) => p.id === m.id);
+            return (
+              <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', cursor: 'pointer' }}>
+                <input type="checkbox" checked={on} disabled={busy} onChange={(e) => { const ids = available.filter((x) => (x.id === m.id ? e.target.checked : inv.paymentMethods.some((p) => p.id === x.id))).map((x) => x.id); void run(() => setMethods({ companyId, invoiceId: inv.id, paymentMethodIds: ids }), 'Payment options updated'); }} />
+                <span>{m.label} <span className="ai3-cap" style={{ display: 'inline' }}>· {KIND_TITLE[m.kind]}</span></span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {inv.payments.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Payments received</div>
+          <table className="ai3-table">
+            <thead><tr><th>Date</th><th>Reference</th><th className="num">{inv.currency}</th>{foreign && <th className="num">Rate</th>}{foreign && <th className="num">{inv.baseCurrency}</th>}</tr></thead>
+            <tbody>{inv.payments.map((p) => <tr key={p.id}><td className="muted">{dateLong(p.occurredAt)}</td><td>{p.reference}</td><td className="num">{fmt(p.amountMinor, { symbol: false })}</td>{foreign && <td className="num">{p.rateToBase}</td>}{foreign && <td className="num">{fmt(p.baseMinor, { symbol: false })}</td>}</tr>)}</tbody>
+          </table>
+        </div>
+      )}
       {openStatus && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border, #ddd)' }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Receive a payment</div>
           <div className="ai3-form-row" style={{ marginBottom: 8 }}>
-            <Field label={`Amount paid (${cur})`}><input className="ai3-input" placeholder={fmt(inv.outstandingMinor, { symbol: false })} value={payAmount} inputMode="decimal" onChange={(e) => setPayAmount(e.target.value)} /></Field>
+            <Field label={`Amount paid (${inv.currency})`}><input className="ai3-input" placeholder={fmt(inv.outstandingMinor, { symbol: false })} value={payAmount} inputMode="decimal" onChange={(e) => setPayAmount(e.target.value)} /></Field>
             <Field label="Date paid"><input className="ai3-input" type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} /></Field>
-            <Field label="Reference"><input className="ai3-input" placeholder="Bank reference" value={payRef} onChange={(e) => setPayRef(e.target.value)} /></Field>
+            {foreign && <Field label={`Rate that day: 1 ${inv.currency} = ? ${inv.baseCurrency}`}><input className="ai3-input" placeholder={inv.rateToBase} value={payRate} inputMode="decimal" onChange={(e) => setPayRate(e.target.value)} /></Field>}
+            <Field label="Reference"><input className="ai3-input" placeholder="Bank or transaction reference" value={payRef} onChange={(e) => setPayRef(e.target.value)} /></Field>
           </div>
           <button
             className="ai3-btn primary"
@@ -719,15 +866,146 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
             onClick={async () => {
               const raw = payAmount.replace(/,/g, '');
               const amountMinor = AMOUNT.test(raw) ? toMinor(raw) : inv.outstandingMinor;
-              const ok = await run(() => pay({ companyId, invoiceId: inv.id, amountMinor, occurredAt: `${payDate}T12:00:00.000Z`, reference: payRef || null }), `Payment on ${inv.number} recorded`);
-              if (ok) { setPayAmount(''); setPayRef(''); }
+              const ok = await run(() => pay({ companyId, invoiceId: inv.id, amountMinor, occurredAt: `${payDate}T12:00:00.000Z`, reference: payRef || null, rateToBase: foreign && payRate ? payRate : null }), `Payment on ${inv.number} recorded`);
+              if (ok) { setPayAmount(''); setPayRef(''); setPayRate(''); }
             }}
           >
             Add payment
           </button>
+          {foreign && <p className="ai3-note">Leave the rate empty to use the issue rate. A different rate books the difference as a currency gain or loss.</p>}
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Settings: company details, base currency, payment options
+// ---------------------------------------------------------------------------
+
+function PaymentMethodForm({ companyId, onDone }: { companyId: string; onDone: () => void }) {
+  const create = usePluginAction('payment-method.create');
+  const { run, busy } = useRun([onDone]);
+  const [kind, setKind] = useState<PaymentMethod['kind']>('bank');
+  const [label, setLabel] = useState('');
+  const [currency, setCurrency] = useState('');
+  const [d, setD] = useState<PaymentDetails>({});
+  const set = (k: keyof PaymentDetails) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setD({ ...d, [k]: e.target.value });
+  const ok = label.trim() && (kind === 'bank' ? Boolean(d.accountNumber || d.iban) : kind === 'stripe' ? /^https:\/\//.test(d.url ?? '') : kind === 'crypto' ? Boolean(d.address && d.asset && d.network) : Boolean(d.instructions));
+  return (
+    <div className="ai3-card" style={{ marginBottom: 14 }}>
+      <h3>Add a payment option</h3>
+      <div className="ai3-form-row">
+        <Field label="Type">
+          <select className="ai3-select" value={kind} onChange={(e) => { setKind(e.target.value as PaymentMethod['kind']); setD({}); }}>
+            <option value="bank">Bank transfer</option><option value="stripe">Stripe payment link</option><option value="crypto">Crypto wallet</option><option value="other">Other</option>
+          </select>
+        </Field>
+        <Field label="Label on the invoice"><input className="ai3-input" placeholder={kind === 'bank' ? 'Mercury (USD)' : kind === 'stripe' ? 'Pay by card' : kind === 'crypto' ? 'USDC on Base' : 'PayPal'} value={label} onChange={(e) => setLabel(e.target.value)} /></Field>
+        <Field label="Currency (optional)">
+          <select className="ai3-select" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            <option value="">Any</option>{CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+      </div>
+      {kind === 'bank' && (
+        <div className="ai3-form-row">
+          <Field label="Account name"><input className="ai3-input" value={d.accountName ?? ''} onChange={set('accountName')} /></Field>
+          <Field label="Bank"><input className="ai3-input" value={d.bankName ?? ''} onChange={set('bankName')} /></Field>
+          <Field label="Account number"><input className="ai3-input" value={d.accountNumber ?? ''} onChange={set('accountNumber')} /></Field>
+          <Field label="IBAN"><input className="ai3-input" value={d.iban ?? ''} onChange={set('iban')} /></Field>
+          <Field label="Sort code"><input className="ai3-input" value={d.sortCode ?? ''} onChange={set('sortCode')} /></Field>
+          <Field label="Routing number"><input className="ai3-input" value={d.routingNumber ?? ''} onChange={set('routingNumber')} /></Field>
+          <Field label="BIC / SWIFT"><input className="ai3-input" value={d.bic ?? ''} onChange={set('bic')} /></Field>
+        </div>
+      )}
+      {kind === 'stripe' && (
+        <div className="ai3-form-row">
+          <Field label="Payment link (https://…)" style={{ gridColumn: 'span 2' }}><input className="ai3-input" placeholder="https://buy.stripe.com/…" value={d.url ?? ''} onChange={set('url')} /></Field>
+        </div>
+      )}
+      {kind === 'crypto' && (
+        <div className="ai3-form-row">
+          <Field label="Asset"><input className="ai3-input" placeholder="USDC" value={d.asset ?? ''} onChange={set('asset')} list="ai3-assets" /><datalist id="ai3-assets"><option value="USDC" /><option value="USDT" /><option value="ETH" /><option value="BTC" /><option value="SOL" /></datalist></Field>
+          <Field label="Network"><input className="ai3-input" placeholder="Base" value={d.network ?? ''} onChange={set('network')} list="ai3-networks" /><datalist id="ai3-networks">{NETWORKS.map((n) => <option key={n} value={n} />)}</datalist></Field>
+          <Field label="Wallet address" style={{ gridColumn: 'span 2' }}><input className="ai3-input" placeholder="0x…" value={d.address ?? ''} onChange={set('address')} /></Field>
+        </div>
+      )}
+      {kind === 'other' && (
+        <div className="ai3-form-row">
+          <Field label="Instructions" style={{ gridColumn: 'span 3' }}><textarea className="ai3-input" rows={3} value={d.instructions ?? ''} onChange={set('instructions')} placeholder="How the customer should pay" /></Field>
+        </div>
+      )}
+      <div className="ai3-actions">
+        <button className="ai3-btn primary" disabled={busy || !ok} onClick={() => run(() => create({ companyId, kind, label, currency: currency || null, details: d }), 'Payment option added')}>Add</button>
+        <button className="ai3-btn" onClick={onDone}>Cancel</button>
+      </div>
+      {kind === 'crypto' && <p className="ai3-note">The address is printed exactly as entered. Check it twice; a wrong address cannot be undone.</p>}
+    </div>
+  );
+}
+
+function SettingsTab({ companyId, company }: { companyId: string; company: Company | null }) {
+  const data = usePluginData<{ settings: Settings; paymentMethods: PaymentMethod[] }>('settings', { companyId });
+  const update = usePluginAction('settings.update');
+  const updateMethod = usePluginAction('payment-method.update');
+  const { run, busy } = useRun([data.refresh]);
+  const [form, setForm] = useState<Settings | null>(null);
+  const [adding, setAdding] = useState(false);
+  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null };
+  const setField = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...s, [k]: e.target.value });
+  const methods = data.data?.paymentMethods ?? [];
+  return (
+    <>
+      <Header crumb="Settings" title="Finance settings" sub={company?.name} />
+      <Failure error={data.error} />
+      <div className="ai3-grid two">
+        <div className="ai3-card">
+          <h3>On the invoice</h3>
+          <div className="ai3-form-row">
+            <Field label="Legal name" style={{ gridColumn: 'span 2' }}><input className="ai3-input" value={s.legalName ?? ''} onChange={setField('legalName')} placeholder={company?.name ?? ''} /></Field>
+            <Field label="Email"><input className="ai3-input" value={s.email ?? ''} onChange={setField('email')} /></Field>
+            <Field label="Address" style={{ gridColumn: 'span 2' }}><textarea className="ai3-input" rows={3} value={s.address ?? ''} onChange={setField('address')} /></Field>
+            <Field label="Tax ID"><input className="ai3-input" value={s.taxId ?? ''} onChange={setField('taxId')} /></Field>
+            <Field label="Footer" style={{ gridColumn: 'span 3' }}><textarea className="ai3-input" rows={2} value={s.invoiceFooter ?? ''} onChange={setField('invoiceFooter')} placeholder="Registered in…, payment terms, thank you" /></Field>
+          </div>
+          <div className="ai3-actions">
+            <button className="ai3-btn primary" disabled={busy || !form} onClick={() => run(async () => { await update({ companyId, legalName: s.legalName ?? '', address: s.address ?? '', email: s.email ?? '', taxId: s.taxId ?? '', invoiceFooter: s.invoiceFooter ?? '' }); setForm(null); }, 'Saved')}>Save</button>
+          </div>
+        </div>
+        <div className="ai3-card">
+          <h3>Base currency</h3>
+          <p className="ai3-note" style={{ marginTop: 0 }}>The books are kept in one currency. Invoices can be in any other, with a rate to this one fixed at issue; differences at payment go to Currency gains and losses.</p>
+          <div className="ai3-form-row">
+            <Field label="Base currency">
+              <select className="ai3-select" value={s.baseCurrency} onChange={setField('baseCurrency')}>{CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+            </Field>
+          </div>
+          <div className="ai3-actions">
+            <button className="ai3-btn" disabled={busy || !form || form.baseCurrency === data.data?.settings.baseCurrency} onClick={() => run(async () => { await update({ companyId, baseCurrency: s.baseCurrency }); setForm(null); }, 'Base currency saved')}>Save currency</button>
+          </div>
+          <p className="ai3-note">Change this before anything is posted. It does not convert existing entries.</p>
+        </div>
+      </div>
+      <div className="ai3-card" style={{ marginTop: 14 }}>
+        <div className="ai3-toolbar">
+          <h3 style={{ margin: 0 }}>Payment options <span className="ctx">what customers see under "How to pay"</span></h3>
+          <button className="ai3-btn primary" onClick={() => setAdding(true)}>Add payment option</button>
+        </div>
+        {adding && <PaymentMethodForm companyId={companyId} onDone={() => { setAdding(false); data.refresh(); }} />}
+        {methods.length === 0 && !adding && <div className="ai3-empty">None yet. Add a bank account, a Stripe payment link, a crypto wallet, or written instructions.</div>}
+        {methods.map((m) => (
+          <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '10px 0', borderTop: '1px solid var(--border, #eee)', opacity: m.enabled ? 1 : 0.55 }}>
+            <PayLines m={m} />
+            <div className="ai3-actions" style={{ alignItems: 'flex-start' }}>
+              <span className={`ai3-badge ${m.enabled ? 'paid' : 'void'}`}>{m.enabled ? (m.isDefault ? 'on new invoices' : 'optional') : 'off'}</span>
+              <button className="ai3-btn small" disabled={busy} onClick={() => run(() => updateMethod({ companyId, id: m.id, isDefault: !m.isDefault }), 'Updated')}>{m.isDefault ? 'Make optional' : 'Use by default'}</button>
+              <button className="ai3-btn small" disabled={busy} onClick={() => run(() => updateMethod({ companyId, id: m.id, enabled: !m.enabled }), 'Updated')}>{m.enabled ? 'Turn off' : 'Turn on'}</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -770,10 +1048,10 @@ function InvoicesTab({ companyId, company }: { companyId: string; company: Compa
         </div>
         <table className="ai3-table">
           <thead>
-            <tr><th>Number</th><th>To</th><th>Date</th><th>Due date</th><th>Status</th><th className="num">Paid</th><th className="num">Due</th></tr>
+            <tr><th>Number</th><th>To</th><th>Date</th><th>Due date</th><th>Status</th><th>Currency</th><th className="num">Paid</th><th className="num">Due</th></tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={7} className="ai3-empty">{invs.loading ? 'Loading…' : 'No invoices here.'}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={8} className="ai3-empty">{invs.loading ? 'Loading…' : 'No invoices here.'}</td></tr>}
             {rows.map((i) => {
               const overdueDays = (i.status === 'issued' || i.status === 'part_paid') && i.dueAt && i.dueAt.slice(0, 10) < today() ? daysBetween(i.dueAt, today()) : 0;
               const isOpen = openId === i.id;
@@ -785,11 +1063,12 @@ function InvoicesTab({ companyId, company }: { companyId: string; company: Compa
                     <td className="muted">{dateLong(i.issuedAt ?? i.createdAt)}</td>
                     <td className={overdueDays ? 'red' : 'muted'}>{dateLong(i.dueAt)}{overdueDays ? <span> · {overdueDays}d overdue</span> : null}</td>
                     <td><span className={`ai3-badge ${i.status}`}>{statusLabel(i.status)}</span></td>
+                    <td className="muted">{i.currency}</td>
                     <td className="num">{fmt(i.paidMinor, { symbol: false })}</td>
                     <td className="num">{fmt(i.status === 'draft' ? i.totalMinor : i.outstandingMinor, { symbol: false })}</td>
                   </tr>
                   {isOpen && (
-                    <tr><td colSpan={7} style={{ padding: '0 0 8px' }}><InvoiceDetail companyId={companyId} invoice={i} cur={cur} onChanged={refreshAll} /></td></tr>
+                    <tr><td colSpan={8} style={{ padding: '0 0 8px' }}><InvoiceDetail companyId={companyId} invoice={i} cur={cur} onChanged={refreshAll} /></td></tr>
                   )}
                 </React.Fragment>
               );
@@ -1353,7 +1632,7 @@ function ReconcileTab({ companyId, company }: { companyId: string; company: Comp
 // Page + sidebar
 // ---------------------------------------------------------------------------
 
-const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'statements'] as const;
+const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'statements', 'settings'] as const;
 type Tab = (typeof TABS)[number];
 
 function tabFromSearch(search: string): Tab {
@@ -1378,6 +1657,7 @@ export function LedgerPage(_props: PluginPageProps) {
         {tab === 'statements' && <StatementsTab companyId={companyId} company={company.data} />}
         {tab === 'banks' && <BanksTab companyId={companyId} company={company.data} />}
         {tab === 'reconcile' && <ReconcileTab companyId={companyId} company={company.data} />}
+        {tab === 'settings' && <SettingsTab companyId={companyId} company={company.data} />}
         <p className="ai3-note" style={{ marginTop: 28 }}>AI3 Ledger · double-entry, append-only, integer minor units. Costs come from Paperclip; nothing is re-derived.</p>
       </div>
     </ErrorBoundary>
@@ -1392,6 +1672,7 @@ const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, se
   { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') },
   { label: 'Balance sheet', to: '/ledger?tab=statements&view=balance', match: (p, s) => p.endsWith('/ledger') && s.includes('view=balance') },
   { label: 'Costs', to: '/costs', match: (p) => p.endsWith('/costs') },
+  { label: 'Settings', to: '/ledger?tab=settings', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'settings' },
 ];
 
 export function LedgerSidebarItem(_props: PluginSidebarProps) {

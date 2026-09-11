@@ -55,6 +55,13 @@ import {
   lastRun,
   searchInstitutions,
   FEED_INSTITUTIONS,
+  getSettings,
+  updateSettings,
+  listPaymentMethods,
+  createPaymentMethod,
+  updatePaymentMethod,
+  setInvoicePaymentMethods,
+  type PaymentKind,
   type Decision,
   type BankKind,
   type GroupBy,
@@ -403,7 +410,16 @@ const plugin = definePlugin({
         const all = await context.companies.list({ limit: 500 });
         for (const c of all) companyNames.set(c.id, c.name);
       }
-      return { companyId, name: companyNames.get(companyId) ?? 'Company', currency: CURRENCY };
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      return { companyId, name: companyNames.get(companyId) ?? 'Company', currency: settings.baseCurrency, settings };
+    });
+    context.data.register('settings', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, settings: await getSettings(ledger(), companyId, CURRENCY), paymentMethods: await listPaymentMethods(ledger(), companyId) };
+    });
+    context.data.register('payment-methods', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, paymentMethods: await listPaymentMethods(ledger(), companyId, { enabledOnly: params['enabledOnly'] === true }) };
     });
     context.data.register('periods', async (params) => {
       const companyId = await companyOf(params);
@@ -506,11 +522,15 @@ const plugin = definePlugin({
     context.actions.register('invoice.create', async (params, ctx) => {
       const by = boardOnly(ctx);
       const lines = Array.isArray(params['lines']) ? (params['lines'] as Array<Record<string, unknown>>) : [];
-      return createInvoice(ledger(), await companyOf(params), {
+      const companyId = await companyOf(params);
+      return createInvoice(ledger(), companyId, {
         customerId: String(params['customerId'] ?? ''),
-        currency: CURRENCY,
         createdBy: by,
         dueAt: s(params['dueAt']) ?? null,
+        currency: s(params['currency']) ?? (await getSettings(ledger(), companyId, CURRENCY)).baseCurrency,
+        rateToBase: s(params['rateToBase']) ?? null,
+        paymentMethodIds: Array.isArray(params['paymentMethodIds']) ? (params['paymentMethodIds'] as string[]).map(String) : null,
+        notes: s(params['notes']) ?? null,
         lines: lines.map((x) => ({ description: String(x['description'] ?? ''), quantity: typeof x['quantity'] === 'number' || typeof x['quantity'] === 'string' ? x['quantity'] : 1, unitAmountMinor: String(x['unitAmountMinor'] ?? '') })),
       });
     });
@@ -524,7 +544,47 @@ const plugin = definePlugin({
         amountMinor: amountOf(params['amountMinor']),
         reference: s(params['reference']) ?? null,
         createdBy: by,
+        rateToBase: s(params['rateToBase']) ?? null,
         ...(s(params['occurredAt']) ? { occurredAt: s(params['occurredAt'])! } : {}),
+      });
+    });
+    context.actions.register('invoice.set-payment-methods', async (params, ctx) => {
+      boardOnly(ctx);
+      const ids = Array.isArray(params['paymentMethodIds']) ? (params['paymentMethodIds'] as string[]).map(String) : null;
+      return setInvoicePaymentMethods(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), ids);
+    });
+    // Settings and payment options
+    context.actions.register('settings.update', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const pick = (k: string) => (typeof params[k] === 'string' ? (params[k] as string) : undefined);
+      return updateSettings(ledger(), companyId, {
+        ...(pick('baseCurrency') ? { baseCurrency: pick('baseCurrency')!.toUpperCase() } : {}),
+        ...(params['legalName'] !== undefined ? { legalName: pick('legalName') ?? null } : {}),
+        ...(params['address'] !== undefined ? { address: pick('address') ?? null } : {}),
+        ...(params['email'] !== undefined ? { email: pick('email') ?? null } : {}),
+        ...(params['taxId'] !== undefined ? { taxId: pick('taxId') ?? null } : {}),
+        ...(params['invoiceFooter'] !== undefined ? { invoiceFooter: pick('invoiceFooter') ?? null } : {}),
+      });
+    });
+    context.actions.register('payment-method.create', async (params, ctx) => {
+      boardOnly(ctx);
+      return createPaymentMethod(ledger(), await companyOf(params), {
+        kind: String(params['kind'] ?? 'other') as PaymentKind,
+        label: String(params['label'] ?? ''),
+        currency: s(params['currency']) ? s(params['currency'])!.toUpperCase() : null,
+        details: params['details'],
+        isDefault: params['isDefault'] !== false,
+      });
+    });
+    context.actions.register('payment-method.update', async (params, ctx) => {
+      boardOnly(ctx);
+      return updatePaymentMethod(ledger(), await companyOf(params), String(params['id'] ?? ''), {
+        ...(typeof params['label'] === 'string' ? { label: params['label'] as string } : {}),
+        ...(typeof params['enabled'] === 'boolean' ? { enabled: params['enabled'] as boolean } : {}),
+        ...(typeof params['isDefault'] === 'boolean' ? { isDefault: params['isDefault'] as boolean } : {}),
+        ...(params['details'] !== undefined ? { details: params['details'] } : {}),
+        ...(params['currency'] !== undefined ? { currency: s(params['currency']) ? s(params['currency'])!.toUpperCase() : null } : {}),
       });
     });
     context.actions.register('invoice.void', async (params, ctx) => {

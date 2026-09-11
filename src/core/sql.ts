@@ -76,10 +76,10 @@ export function assertPositiveMinor(value: unknown, label: string): Minor {
   return m;
 }
 
-/** ISO-4217-ish currency code guard. Uppercase, 3 letters. */
+/** Currency code guard: ISO-4217 (USD, EUR) or a stablecoin ticker (USDC, USDT). Uppercase, 2 to 6 letters or digits. */
 export function assertCurrency(value: unknown): string {
-  if (typeof value !== 'string' || !/^[A-Z]{3}$/.test(value)) {
-    throw new TypeError(`ledger: currency must be a three-letter code, got ${String(value)}`);
+  if (typeof value !== 'string' || !/^[A-Z][A-Z0-9]{1,5}$/.test(value)) {
+    throw new TypeError(`ledger: currency must be a code like USD or USDC, got ${String(value)}`);
   }
   return value;
 }

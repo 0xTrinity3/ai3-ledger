@@ -69,3 +69,8 @@ export { propose, apply as applyDecision, run as runReconciliation, decisionOf, 
 
 export type { FeedProvider, FeedInstitution } from './feeds.js';
 export { FEED_INSTITUTIONS, searchInstitutions, providerFor } from './feeds.js';
+
+export type { CompanySettings, PaymentKind, PaymentDetails, PaymentMethod, PaymentInstruction } from './settings.js';
+export { getSettings, updateSettings, listPaymentMethods, createPaymentMethod, updatePaymentMethod, paymentInstructionsFor } from './settings.js';
+export type { InvoicePayment } from './invoices.js';
+export { parseRate, toBase, setInvoicePaymentMethods } from './invoices.js';
