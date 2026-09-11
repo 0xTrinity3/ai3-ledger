@@ -59,6 +59,8 @@ export interface ToolDeps {
 
 const MAJOR = /^-?\d{1,15}(\.\d{1,2})?$/;
 
+const NO_PAYMENT_OPTIONS = 'this invoice carries no payment details because the company has no payment options set. The customer cannot pay from it. Ask the owner to add a bank account, Stripe link or wallet under Finance › Settings › Payment options; issued invoices pick up the defaults when re-published.';
+
 /** "1250.5" → 125050n. Two decimal places, as every currency here is kept. */
 export function majorToMinor(v: unknown, what = 'amount'): bigint {
   const s = String(v ?? '').trim().replace(/,/g, '');
@@ -495,9 +497,10 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
           }
         }
         const summary = invoiceSummary(inv);
+        const warning = inv.paymentMethods.length === 0 ? NO_PAYMENT_OPTIONS : null;
         return {
-          content: `${inv.number} ${inv.status === 'draft' ? 'saved as a draft' : 'issued'} to ${inv.customerName} for ${money(inv.totalMinor, inv.currency)}, due ${day(inv.dueAt)}${inv.hosted?.url ? `. Online copy: ${inv.hosted.url}` : ''}${sent ? `. Emailed to ${inv.hosted?.sentTo} from ${sent.from}` : ''}.`,
-          data: { ...summary, sent },
+          content: `${inv.number} ${inv.status === 'draft' ? 'saved as a draft' : 'issued'} to ${inv.customerName} for ${money(inv.totalMinor, inv.currency)}, due ${day(inv.dueAt)}${inv.hosted?.url ? `. Online copy: ${inv.hosted.url}` : ''}${sent ? `. Emailed to ${inv.hosted?.sentTo} from ${sent.from}` : ''}.${warning ? ` WARNING: ${warning}` : ''}`,
+          data: { ...summary, sent, warning },
         };
       }
       case 'send-invoice': {
@@ -505,7 +508,8 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
         const to = str(p['to']) ?? inv.customerEmail ?? '';
         if (!to) throw new LedgerError(`${inv.number} has no customer email; pass "to"`, 'invalid');
         const r = await send(deps, inv, to, str(p['cc']), str(p['message']));
-        return { content: `${inv.number} emailed to ${to} from ${r.from} via ${r.via}. Online copy: ${r.inv.hosted?.url ?? ''}.`, data: invoiceSummary(r.inv) };
+        const warning = r.inv.paymentMethods.length === 0 ? NO_PAYMENT_OPTIONS : null;
+        return { content: `${inv.number} emailed to ${to} from ${r.from} via ${r.via}. Online copy: ${r.inv.hosted?.url ?? ''}.${warning ? ` WARNING: ${warning}` : ''}`, data: { ...invoiceSummary(r.inv), warning } };
       }
       case 'record-payment': {
         const inv = await findInvoice(db, companyId, p['invoice']);

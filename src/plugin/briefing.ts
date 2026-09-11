@@ -3,7 +3,7 @@
  * Paperclip rather than left under a tab. One issue per company, updated in
  * place while anything is open; nothing is created on a quiet day.
  */
-import { listBankAccounts, listInvoices, position, type Invoice, type LedgerDb } from '../core/index.js';
+import { listBankAccounts, listInvoices, listPaymentMethods, position, type Invoice, type LedgerDb } from '../core/index.js';
 import { minorToMajor } from './tools.js';
 
 export interface BriefingItem { severity: 'high' | 'medium' | 'low'; line: string }
@@ -23,6 +23,10 @@ export async function buildBriefing(db: LedgerDb, companyId: string, now = new D
   const invoices = await listInvoices(db, companyId, { limit: 500 });
   const open = invoices.filter((i) => i.status === 'issued' || i.status === 'part_paid');
 
+  const payOptions = await listPaymentMethods(db, companyId, { enabledOnly: true });
+  if (payOptions.length === 0 && invoices.length > 0) {
+    items.push({ severity: open.length > 0 ? 'high' : 'medium', line: `No payment options are set, so invoices go out without a way to pay${open.length > 0 ? ` (${open.length} open invoice(s) affected)` : ''}. A person adds a bank account, Stripe link or wallet under Finance › Settings › Payment options; ask the owner for the details.` });
+  }
   if (pos.runwayDays !== null && pos.runwayDays < 60) {
     items.push({ severity: pos.runwayDays < 30 ? 'high' : 'medium', line: `Runway is ${pos.runwayDays} days at the trailing burn of ${minorToMajor(pos.trailing30d.dailyBurnMinor)} ${cur} per day (treasury ${minorToMajor(pos.treasuryMinor)} ${cur}).` });
   }

@@ -97,6 +97,8 @@ describe('agent tools', () => {
     expect(d.total).toBe('1450.00');
     expect(d.customer).toBe('Northwind');
     expect(d.link).toBeNull(); // not connected yet
+    expect(r.content).toMatch(/WARNING: this invoice carries no payment details/);
+    expect((r.data as { warning: string | null }).warning).toMatch(/no payment options/);
     const list = await runTool(deps, 'invoices', { status: 'issued' }, RUN);
     expect((list.data as { invoices: unknown[] }).invoices).toHaveLength(1);
     const one = await runTool(deps, 'invoice', { invoice: d.number }, RUN);
@@ -197,6 +199,7 @@ describe('briefing', () => {
     const b = await buildBriefing(db, CO, new Date('2026-12-01T09:00:00.000Z'));
     expect(b).not.toBeNull();
     expect(b!.items.some((i) => i.line.includes('overdue'))).toBe(true); // the EUR invoice is 30 days past due by December
+    expect(b!.items[0]!.line).toMatch(/No payment options are set/); // first, because open invoices cannot be paid
     expect(b!.body).toMatch(/Position on 2026-12-01/);
     const quiet = '99999999-9999-4999-8999-999999999999';
     await seedAccounts(db, quiet, 'USD');
