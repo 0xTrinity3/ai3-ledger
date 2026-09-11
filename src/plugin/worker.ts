@@ -21,6 +21,16 @@ import {
   seedAccounts,
   sweepCosts,
   toMinor,
+  createCustomer,
+  listCustomers,
+  createInvoice,
+  getInvoice,
+  listInvoices,
+  issueInvoice,
+  recordPayment,
+  writeOffInvoice,
+  voidInvoice,
+  type InvoiceStatus,
   type LedgerDb,
   type SweepResult,
 } from '../core/index.js';
@@ -167,7 +177,122 @@ async function handle(input: PluginApiRequestInput): Promise<PluginApiResponse> 
       return json(200, r);
     }
     default:
-      return bad(`Unknown route ${input.routeKey}`, 404);
+      return handleInvoicing(input, l, companyId);
+  }
+}
+
+const INVOICE_STATUSES: InvoiceStatus[] = ['draft', 'issued', 'part_paid', 'paid', 'written_off', 'void'];
+
+function bodyOf(input: PluginApiRequestInput): Record<string, unknown> {
+  return input.body && typeof input.body === 'object' ? (input.body as Record<string, unknown>) : {};
+}
+
+function who(input: PluginApiRequestInput): string {
+  return input.actor.actorType === 'agent' ? `agent:${input.actor.agentId ?? input.actor.actorId}` : input.actor.userId ?? 'board';
+}
+
+async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, companyId: string): Promise<PluginApiResponse> {
+  const board = input.actor.actorType === 'user';
+  const body = bodyOf(input);
+  const id = input.params['id'] ?? '';
+  try {
+    switch (input.routeKey) {
+      case 'customers.list':
+        return json(200, { companyId, customers: await listCustomers(l, companyId) });
+      case 'customers.create': {
+        if (!board) return bad('Only the board can add customers', 403);
+        const c = await createCustomer(l, companyId, {
+          name: String(body['name'] ?? ''),
+          email: typeof body['email'] === 'string' ? body['email'] : null,
+          externalRef: typeof body['externalRef'] === 'string' ? body['externalRef'] : null,
+        });
+        return json(201, c);
+      }
+      case 'invoices.list': {
+        const q = input.query;
+        const status = str(q['status']);
+        const customerId = str(q['customerId']);
+        const limitRaw = Number(str(q['limit']) ?? 100);
+        return json(200, {
+          companyId,
+          invoices: await listInvoices(l, companyId, {
+            ...(status && (INVOICE_STATUSES as string[]).includes(status) ? { status: status as InvoiceStatus } : {}),
+            ...(customerId ? { customerId } : {}),
+            limit: Number.isFinite(limitRaw) ? limitRaw : 100,
+          }),
+        });
+      }
+      case 'invoices.get': {
+        const inv = await getInvoice(l, companyId, id);
+        return inv ? json(200, inv) : bad('Invoice not found', 404);
+      }
+      case 'invoices.create': {
+        // An agent's invoice is a draft with the agent recorded on it. Nothing
+        // reaches a report until a person issues it (acceptance criterion 8).
+        const subject = {
+          ...(typeof body['workRef'] === 'string' && body['workRef'] ? { work: body['workRef'] } : {}),
+          ...(typeof body['goalRef'] === 'string' && body['goalRef'] ? { goal: body['goalRef'] } : {}),
+          ...(board
+            ? typeof body['agentRef'] === 'string' && body['agentRef']
+              ? { agent: body['agentRef'] }
+              : {}
+            : input.actor.agentId
+              ? { agent: input.actor.agentId }
+              : {}),
+        };
+        const lines = Array.isArray(body['lines']) ? (body['lines'] as Array<Record<string, unknown>>) : [];
+        const inv = await createInvoice(l, companyId, {
+          customerId: String(body['customerId'] ?? ''),
+          currency: CURRENCY,
+          dueAt: typeof body['dueAt'] === 'string' ? body['dueAt'] : null,
+          subject,
+          createdBy: who(input),
+          lines: lines.map((x) => ({
+            description: String(x['description'] ?? ''),
+            quantity: typeof x['quantity'] === 'number' || typeof x['quantity'] === 'string' ? x['quantity'] : 1,
+            unitAmountMinor: typeof x['unitAmountMinor'] === 'number' || typeof x['unitAmountMinor'] === 'string' ? x['unitAmountMinor'] : '',
+          })),
+        });
+        return json(201, inv);
+      }
+      case 'invoices.issue': {
+        if (!board) return bad('Only the board can issue an invoice', 403);
+        const inv = await issueInvoice(l, companyId, id, {
+          ...(typeof body['issuedAt'] === 'string' ? { issuedAt: body['issuedAt'] } : {}),
+          createdBy: who(input),
+        });
+        return json(200, inv);
+      }
+      case 'invoices.payment': {
+        if (!board) return bad('Only the board can record a payment', 403);
+        const inv = await recordPayment(l, companyId, id, {
+          amountMinor: typeof body['amountMinor'] === 'number' || typeof body['amountMinor'] === 'string' ? body['amountMinor'] : '',
+          ...(typeof body['occurredAt'] === 'string' ? { occurredAt: body['occurredAt'] } : {}),
+          reference: typeof body['reference'] === 'string' ? body['reference'] : null,
+          createdBy: who(input),
+        });
+        return json(200, inv);
+      }
+      case 'invoices.writeoff': {
+        if (!board) return bad('Only the board can write off an invoice', 403);
+        const inv = await writeOffInvoice(l, companyId, id, {
+          ...(typeof body['occurredAt'] === 'string' ? { occurredAt: body['occurredAt'] } : {}),
+          ...(typeof body['reason'] === 'string' ? { reason: body['reason'] } : {}),
+          createdBy: who(input),
+        });
+        return json(200, inv);
+      }
+      case 'invoices.void': {
+        if (!board) return bad('Only the board can void an invoice', 403);
+        return json(200, await voidInvoice(l, companyId, id));
+      }
+      default:
+        return bad(`Unknown route ${input.routeKey}`, 404);
+    }
+  } catch (err) {
+    if (err instanceof LedgerError) return bad(err.message, err.code === 'period_closed' ? 409 : 400);
+    if (err instanceof RangeError || err instanceof TypeError) return bad(err.message, 400);
+    throw err;
   }
 }
 

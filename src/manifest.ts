@@ -11,7 +11,7 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.2.0',
+  version: '0.3.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -47,6 +47,17 @@ const manifest: PaperclipPluginManifestV1 = {
     { routeKey: 'transactions', method: 'GET', path: '/transactions', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'funding', method: 'POST', path: '/funding', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'sweep', method: 'POST', path: '/sweep', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    // M3: customers, invoices, receivables, payments
+    { routeKey: 'customers.list', method: 'GET', path: '/customers', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'customers.create', method: 'POST', path: '/customers', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'invoices.list', method: 'GET', path: '/invoices', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'invoices.get', method: 'GET', path: '/invoices/:id', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    // an agent may raise an invoice; it is always a draft and a person issues it
+    { routeKey: 'invoices.create', method: 'POST', path: '/invoices', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'invoices.issue', method: 'POST', path: '/invoices/:id/issue', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'invoices.payment', method: 'POST', path: '/invoices/:id/payments', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'invoices.writeoff', method: 'POST', path: '/invoices/:id/write-off', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'invoices.void', method: 'POST', path: '/invoices/:id/void', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
   ],
 };
 

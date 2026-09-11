@@ -36,3 +36,18 @@ export { sweepCosts, readCursor, writeCursor } from './sweep.js';
 
 export type { Position, PositionAccount } from './position.js';
 export { position } from './position.js';
+
+export type { Customer, Invoice, InvoiceLine, InvoiceLineInput, InvoiceStatus, CreateInvoiceInput } from './invoices.js';
+export {
+  createCustomer,
+  getCustomer,
+  listCustomers,
+  createInvoice,
+  getInvoice,
+  listInvoices,
+  issueInvoice,
+  recordPayment,
+  writeOffInvoice,
+  voidInvoice,
+  receivablesOutstanding,
+} from './invoices.js';
