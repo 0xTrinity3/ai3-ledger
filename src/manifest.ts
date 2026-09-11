@@ -11,7 +11,7 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.3.0',
+  version: '0.4.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -58,6 +58,12 @@ const manifest: PaperclipPluginManifestV1 = {
     { routeKey: 'invoices.payment', method: 'POST', path: '/invoices/:id/payments', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'invoices.writeoff', method: 'POST', path: '/invoices/:id/write-off', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'invoices.void', method: 'POST', path: '/invoices/:id/void', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    // M4: periods and reports
+    { routeKey: 'periods.list', method: 'GET', path: '/periods', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'periods.create', method: 'POST', path: '/periods', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'periods.close', method: 'POST', path: '/periods/:id/close', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'reports.pnl', method: 'GET', path: '/reports/pnl', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'reports.balance-sheet', method: 'GET', path: '/reports/balance-sheet', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
   ],
 };
 

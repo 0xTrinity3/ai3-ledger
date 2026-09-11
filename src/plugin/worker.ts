@@ -31,6 +31,14 @@ import {
   writeOffInvoice,
   voidInvoice,
   type InvoiceStatus,
+  listPeriods,
+  createPeriod,
+  ensureMonth,
+  closePeriod,
+  profitAndLoss,
+  balanceSheet,
+  getPeriod,
+  type GroupBy,
   type LedgerDb,
   type SweepResult,
 } from '../core/index.js';
@@ -281,6 +289,41 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
           createdBy: who(input),
         });
         return json(200, inv);
+      }
+      case 'periods.list':
+        return json(200, { companyId, periods: await listPeriods(l, companyId) });
+      case 'periods.create': {
+        if (!board) return bad('Only the board can create periods', 403);
+        if (typeof body['month'] === 'string') return json(201, await ensureMonth(l, companyId, body['month']));
+        return json(201, await createPeriod(l, companyId, { startsOn: String(body['startsOn'] ?? ''), endsOn: String(body['endsOn'] ?? '') }));
+      }
+      case 'periods.close': {
+        if (!board) return bad('Only the board can close a period', 403);
+        return json(200, await closePeriod(l, companyId, id, who(input)));
+      }
+      case 'reports.pnl': {
+        const q = input.query;
+        const groupRaw = str(q['groupBy']);
+        const groupBy = groupRaw === 'agent' || groupRaw === 'project' || groupRaw === 'goal' ? (groupRaw as GroupBy) : null;
+        const periodId = str(q['periodId']);
+        let from = str(q['from']);
+        let to = str(q['to']);
+        if (periodId) {
+          const p = await getPeriod(l, companyId, periodId);
+          if (!p) return bad('Period not found', 404);
+          from = `${p.startsOn}T00:00:00.000Z`;
+          to = `${p.endsOn}T23:59:59.999Z`;
+        }
+        if (!from || !to) {
+          const now = new Date();
+          from = from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+          to = to ?? now.toISOString();
+        }
+        return json(200, await profitAndLoss(l, companyId, { from, to }, groupBy));
+      }
+      case 'reports.balance-sheet': {
+        const asOf = str(input.query['asOf']);
+        return json(200, await balanceSheet(l, companyId, asOf ?? new Date()));
       }
       case 'invoices.void': {
         if (!board) return bad('Only the board can void an invoice', 403);

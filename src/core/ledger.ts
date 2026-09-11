@@ -253,7 +253,7 @@ async function closedPeriodFor(db: LedgerDb, companyId: string, occurredAt: Date
     `SELECT starts_on::text || '..' || ends_on::text AS name
        FROM ${table(db, 'periods')}
       WHERE company_id = $1 AND status = 'closed'
-        AND ($2::timestamptz)::date BETWEEN starts_on AND ends_on
+        AND ($2::timestamptz AT TIME ZONE 'UTC')::date BETWEEN starts_on AND ends_on
       LIMIT 1`,
     [companyId, toIso(occurredAt)],
   );

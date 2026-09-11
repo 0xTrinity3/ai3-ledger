@@ -51,3 +51,9 @@ export {
   voidInvoice,
   receivablesOutstanding,
 } from './invoices.js';
+
+export type { Period } from './periods.js';
+export { listPeriods, getPeriod, createPeriod, ensureMonth, closePeriod, monthBounds } from './periods.js';
+
+export type { GroupBy, PnlLine, PnlGroup, ProfitAndLoss, BalanceSheet, BalanceSheetLine } from './reports.js';
+export { profitAndLoss, balanceSheet } from './reports.js';

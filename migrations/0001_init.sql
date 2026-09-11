@@ -211,7 +211,7 @@ BEGIN
     FROM periods
    WHERE company_id = NEW.company_id
      AND status = 'closed'
-     AND NEW.occurred_at::date BETWEEN starts_on AND ends_on
+     AND (NEW.occurred_at AT TIME ZONE 'UTC')::date BETWEEN starts_on AND ends_on
    LIMIT 1;
   IF closed_name IS NOT NULL THEN
     RAISE EXCEPTION 'ledger: period % is closed', closed_name
