@@ -61,6 +61,7 @@ import {
   createPaymentMethod,
   updatePaymentMethod,
   setInvoicePaymentMethods,
+  getRate,
   type PaymentKind,
   type Decision,
   type BankKind,
@@ -412,6 +413,14 @@ const plugin = definePlugin({
       }
       const settings = await getSettings(ledger(), companyId, CURRENCY);
       return { companyId, name: companyNames.get(companyId) ?? 'Company', currency: settings.baseCurrency, settings };
+    });
+    // Exchange rate for a day: ECB via Frankfurter for fiat, CoinGecko for crypto. The person can still overwrite it.
+    context.data.register('fx-rate', async (params) => {
+      await companyOf(params);
+      const from = s(params['from']);
+      const to = s(params['to']);
+      if (!from || !to) throw new Error('from and to are required');
+      return getRate((url, init) => context.http.fetch(url, init), from, to, s(params['date']));
     });
     context.data.register('settings', async (params) => {
       const companyId = await companyOf(params);

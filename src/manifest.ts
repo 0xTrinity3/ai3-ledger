@@ -26,6 +26,7 @@ const manifest: PaperclipPluginManifestV1 = {
     'api.routes.register',
     'ui.page.register',
     'ui.sidebar.register',
+    'http.outbound',
   ],
   entrypoints: {
     worker: 'dist/plugin/worker.js',

@@ -566,6 +566,7 @@ const NETWORKS = ['Base', 'Ethereum', 'Solana', 'Polygon', 'Arbitrum', 'Optimism
 
 interface PaymentDetails { accountName?: string; bankName?: string; accountNumber?: string; iban?: string; sortCode?: string; routingNumber?: string; bic?: string; url?: string; network?: string; asset?: string; address?: string; instructions?: string }
 interface PaymentMethod { id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails; isDefault: boolean; enabled: boolean }
+interface RateQuote { from: string; to: string; rate: string; date: string; source: string }
 interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null }
 
 const KIND_TITLE: Record<PaymentMethod['kind'], string> = { bank: 'Bank transfer', stripe: 'Pay online', crypto: 'Crypto', other: 'Other' };
@@ -602,9 +603,14 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([{ description: '', quantity: '1', unit: '' }]);
   const [chosen, setChosen] = useState<Record<string, boolean> | null>(null);
+  const [rateTouched, setRateTouched] = useState(false);
   const available = methods.data?.paymentMethods ?? [];
   const picked = chosen ?? Object.fromEntries(available.map((m) => [m.id, m.isDefault]));
   const foreign = currency !== cur;
+  const fx = usePluginData<RateQuote>('fx-rate', foreign ? { companyId, from: currency, to: cur, date: issueDate } : { companyId, from: cur, to: cur });
+  useEffect(() => {
+    if (foreign && fx.data && !rateTouched) setRate(fx.data.rate);
+  }, [foreign, fx.data, rateTouched]);
   const lineTotal = (l: { quantity: string; unit: string }) => {
     if (!AMOUNT.test(l.unit.replace(/,/g, '')) || !/^\d+(\.\d+)?$/.test(l.quantity)) return 0n;
     const unit = BigInt(toMinor(l.unit.replace(/,/g, '')));
@@ -665,7 +671,8 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
         </Field>
         {foreign && (
           <Field label={`Rate: 1 ${currency} = ? ${cur}`}>
-            <input className="ai3-input" placeholder="1.0850" value={rate} inputMode="decimal" onChange={(e) => setRate(e.target.value)} />
+            <input className="ai3-input" placeholder={fx.loading ? 'fetching…' : '1.0850'} value={rate} inputMode="decimal" onChange={(e) => { setRate(e.target.value); setRateTouched(true); }} />
+            <span className="ai3-cap">{fx.error ? `No rate found: ${fx.error.message}` : fx.data && !rateTouched ? `${fx.data.source}, ${dateLong(fx.data.date)}` : rateTouched ? <a href="#" onClick={(e) => { e.preventDefault(); setRateTouched(false); }}>use the published rate</a> : 'fetching…'}</span>
           </Field>
         )}
         <Field label="Invoice number"><input className="ai3-input" value="Assigned on save" disabled /></Field>
@@ -787,11 +794,16 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
   const [payDate, setPayDate] = useState(today());
   const [payRef, setPayRef] = useState('');
   const [payRate, setPayRate] = useState('');
+  const [payRateTouched, setPayRateTouched] = useState(false);
   const [issueDate, setIssueDate] = useState(today());
   const [showDoc, setShowDoc] = useState(true);
   const inv = full.data ?? invoice;
   const openStatus = inv.status === 'issued' || inv.status === 'part_paid';
   const foreign = inv.currency !== inv.baseCurrency;
+  const fxPay = usePluginData<RateQuote>('fx-rate', foreign && openStatus ? { companyId, from: inv.currency, to: inv.baseCurrency, date: payDate } : { companyId, from: inv.currency, to: inv.currency });
+  useEffect(() => {
+    if (foreign && fxPay.data && !payRateTouched) setPayRate(fxPay.data.rate);
+  }, [foreign, fxPay.data, payRateTouched]);
   const available = methods.data?.paymentMethods ?? [];
   const printDoc = () => {
     const el = document.querySelector('.ai3-invoice-doc');
@@ -857,7 +869,7 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
           <div className="ai3-form-row" style={{ marginBottom: 8 }}>
             <Field label={`Amount paid (${inv.currency})`}><input className="ai3-input" placeholder={fmt(inv.outstandingMinor, { symbol: false })} value={payAmount} inputMode="decimal" onChange={(e) => setPayAmount(e.target.value)} /></Field>
             <Field label="Date paid"><input className="ai3-input" type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} /></Field>
-            {foreign && <Field label={`Rate that day: 1 ${inv.currency} = ? ${inv.baseCurrency}`}><input className="ai3-input" placeholder={inv.rateToBase} value={payRate} inputMode="decimal" onChange={(e) => setPayRate(e.target.value)} /></Field>}
+            {foreign && <Field label={`Rate that day: 1 ${inv.currency} = ? ${inv.baseCurrency}`}><input className="ai3-input" placeholder={inv.rateToBase} value={payRate} inputMode="decimal" onChange={(e) => { setPayRate(e.target.value); setPayRateTouched(true); }} /><span className="ai3-cap">{fxPay.data && !payRateTouched ? `${fxPay.data.source}, ${dateLong(fxPay.data.date)}` : fxPay.error ? 'no published rate; the issue rate applies' : ''}</span></Field>}
             <Field label="Reference"><input className="ai3-input" placeholder="Bank or transaction reference" value={payRef} onChange={(e) => setPayRef(e.target.value)} /></Field>
           </div>
           <button
@@ -872,7 +884,7 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
           >
             Add payment
           </button>
-          {foreign && <p className="ai3-note">Leave the rate empty to use the issue rate. A different rate books the difference as a currency gain or loss.</p>}
+          {foreign && <p className="ai3-note">The published rate for the payment date is filled in; change it if your bank applied another. A rate other than the issue rate books the difference as a currency gain or loss.</p>}
         </div>
       )}
     </div>

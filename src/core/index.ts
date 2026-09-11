@@ -74,3 +74,6 @@ export type { CompanySettings, PaymentKind, PaymentDetails, PaymentMethod, Payme
 export { getSettings, updateSettings, listPaymentMethods, createPaymentMethod, updatePaymentMethod, paymentInstructionsFor } from './settings.js';
 export type { InvoicePayment } from './invoices.js';
 export { parseRate, toBase, setInvoicePaymentMethods } from './invoices.js';
+
+export type { RateQuote, FetchLike } from './rates.js';
+export { getRate, isCrypto, clearRateCache, RateError } from './rates.js';
