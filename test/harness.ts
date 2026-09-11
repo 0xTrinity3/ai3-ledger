@@ -50,8 +50,10 @@ export async function openTestDb(schema = `ledger_test_${Math.random().toString(
   const pg = new PGlite();
   await pg.waitReady;
   await pg.exec(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}", public;`);
-  const sql = await readFile(path.join(MIGRATIONS, '0001_init.sql'), 'utf8');
-  await pg.exec(sql);
+  const { readdir } = await import('node:fs/promises');
+  for (const f of (await readdir(MIGRATIONS)).filter((x) => x.endsWith('.sql')).sort()) {
+    await pg.exec(await readFile(path.join(MIGRATIONS, f), 'utf8'));
+  }
   return { sql: clientFor(pg), schema, raw: pg, async close() { await pg.close(); } };
 }
 
@@ -127,12 +129,14 @@ export async function openPluginTestDb(): Promise<PluginTestDb> {
     CREATE SCHEMA "${PLUGIN_NAMESPACE}";
   `);
 
-  const file = path.join(PLUGIN_MIGRATIONS, '0001_init.sql');
-  if (!existsSync(file)) throw new Error(`missing ${file}; run npm run build first`);
-  const sql = await readFile(file, 'utf8');
-  for (const statement of splitStatements(sql)) {
-    validators?.migration(statement);
-    await pg.exec(statement);
+  const { readdir } = await import('node:fs/promises');
+  if (!existsSync(PLUGIN_MIGRATIONS)) throw new Error(`missing ${PLUGIN_MIGRATIONS}; run npm run build first`);
+  for (const f of (await readdir(PLUGIN_MIGRATIONS)).filter((x) => x.endsWith('.sql')).sort()) {
+    const sql = await readFile(path.join(PLUGIN_MIGRATIONS, f), 'utf8');
+    for (const statement of splitStatements(sql)) {
+      validators?.migration(statement);
+      await pg.exec(statement);
+    }
   }
 
   return {

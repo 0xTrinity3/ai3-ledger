@@ -352,7 +352,7 @@ export async function recordPayment(
   db: LedgerDb,
   companyId: string,
   id: string,
-  input: { amountMinor: Minor | number | string; occurredAt?: Date | string; reference?: string | null; createdBy?: string },
+  input: { amountMinor: Minor | number | string; occurredAt?: Date | string; reference?: string | null; createdBy?: string; cashAccountCode?: string },
 ): Promise<Invoice> {
   const inv = await getInvoice(db, companyId, id);
   if (!inv) throw new LedgerError(`invoice ${id} not found for company ${companyId}`, 'invalid');
@@ -376,7 +376,7 @@ export async function recordPayment(
     currency: inv.currency,
     createdBy: input.createdBy ?? 'board',
     entries: [
-      { accountCode: ACCOUNT.TREASURY, direction: 'debit', amountMinor: amount, subject: inv.subject },
+      { accountCode: input.cashAccountCode ?? ACCOUNT.TREASURY, direction: 'debit', amountMinor: amount, subject: inv.subject },
       { accountCode: ACCOUNT.RECEIVABLES, direction: 'credit', amountMinor: amount, subject: inv.subject },
     ],
   });

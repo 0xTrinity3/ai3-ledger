@@ -38,6 +38,25 @@ import {
   profitAndLoss,
   balanceSheet,
   getPeriod,
+  listBankAccounts,
+  getBankAccount,
+  createBankAccount,
+  importStatementLines,
+  listStatementLines,
+  getStatementLine,
+  saveProposal,
+  parseStatement,
+  propose,
+  applyDecision,
+  runReconciliation,
+  decisionOf,
+  listRules,
+  setRuleEnabled,
+  lastRun,
+  searchInstitutions,
+  FEED_INSTITUTIONS,
+  type Decision,
+  type BankKind,
   type GroupBy,
   type LedgerDb,
   type SweepResult,
@@ -408,6 +427,44 @@ const plugin = definePlugin({
     });
     context.data.register('balance-sheet', async (params) => balanceSheet(ledger(), await companyOf(params), s(params['asOf']) ?? new Date()));
 
+    // Banks and reconciliation
+    context.data.register('bank-accounts', async (params) => {
+      const companyId = await companyOf(params);
+      const accounts = await listBankAccounts(ledger(), companyId);
+      const runs = await Promise.all(accounts.map((b) => lastRun(ledger(), companyId, b.id)));
+      return { companyId, accounts: accounts.map((b, i) => ({ ...b, lastRun: runs[i] })) };
+    });
+    context.data.register('statement-lines', async (params) => {
+      const companyId = await companyOf(params);
+      const bankAccountId = String(params['bankAccountId'] ?? '');
+      const status = s(params['status']);
+      const lines = await listStatementLines(ledger(), companyId, bankAccountId, { ...(status ? { status: status as 'all' } : {}), limit: Number(params['limit'] ?? 300) });
+      return { companyId, bankAccountId, lines };
+    });
+    // The queue: every open line with a proposal. Lines without one get proposed now.
+    context.data.register('reconcile-queue', async (params) => {
+      const companyId = await companyOf(params);
+      const bankAccountId = String(params['bankAccountId'] ?? '');
+      const bank = await getBankAccount(ledger(), companyId, bankAccountId);
+      if (!bank) throw new Error('Bank account not found');
+      const lines = await listStatementLines(ledger(), companyId, bankAccountId, { status: 'unreconciled', limit: 500 });
+      const out = [];
+      for (const line of lines) {
+        let p = line.proposal;
+        if (!p) {
+          p = await propose(ledger(), companyId, line);
+          await saveProposal(ledger(), companyId, line.id, p);
+        }
+        out.push({ ...line, proposal: p });
+      }
+      const reconciled = await listStatementLines(ledger(), companyId, bankAccountId, { status: 'all', limit: 500 });
+      return { companyId, bank, queue: out, recent: reconciled.filter((l) => l.status !== 'unreconciled').slice(0, 50), lastRun: await lastRun(ledger(), companyId, bankAccountId) };
+    });
+    context.data.register('bank-rules', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, rules: await listRules(ledger(), companyId) };
+    });
+
     // Actions from the page. The board (a signed-in person) only; the host
     // tells us who is calling.
     const boardOnly = (ctx: { actor: { type: string; userId: string | null } }): string => {
@@ -487,6 +544,86 @@ const plugin = definePlugin({
     context.actions.register('period.close', async (params, ctx) => {
       const by = boardOnly(ctx);
       return closePeriod(ledger(), await companyOf(params), String(params['periodId'] ?? ''), by);
+    });
+
+    // Banks and reconciliation
+    context.data.register('feed-institutions', async (params) => {
+      await companyOf(params);
+      return { institutions: searchInstitutions(s(params['query']) ?? '', s(params['country']) ?? 'US').slice(0, 30), providers: ['plaid', 'truelayer', 'gocardless', 'stripe'] };
+    });
+    // Create from the catalogue (Xero's "Select your account") or by hand. Feeds
+    // that need provider credentials the host does not have yet are created as
+    // pending: the account exists, uploads work, the feed says what it waits for.
+    context.actions.register('bank.create', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const inst = s(params['institutionId']) ? FEED_INSTITUTIONS.find((i) => i.id === s(params['institutionId'])) : undefined;
+      const kind = (inst?.kind ?? (s(params['kind']) as BankKind | undefined)) ?? 'bank';
+      const provider = inst?.provider ?? 'upload';
+      const feed = provider === 'upload' ? 'upload' : provider === 'stripe' ? 'stripe' : 'aggregator';
+      const account = await createBankAccount(ledger(), companyId, {
+        name: s(params['name']) ?? inst?.name ?? 'Bank account', kind, currency: s(params['currency']) ?? CURRENCY, feed,
+        externalRef: inst ? `${provider}:${inst.id}` : null,
+      });
+      const feedStatus = feed === 'upload' ? 'upload' : feed === 'stripe' ? 'needs a restricted Stripe key' : `needs ${provider} credentials on this host`;
+      return { ...account, feedStatus };
+    });
+    // Upload: the page sends the file's text. Read it, import, propose for every new line, post nothing.
+    context.actions.register('bank.import', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const bankAccountId = String(params['bankAccountId'] ?? '');
+      const content = String(params['content'] ?? '');
+      if (content.length > 2_000_000) throw new Error('Statement files up to 2 MB');
+      const parsed = parseStatement(content, s(params['filename']) ?? '');
+      const result = await importStatementLines(ledger(), companyId, bankAccountId, parsed.lines);
+      const run = await runReconciliation(ledger(), companyId, bankAccountId, { autoPost: false, by: 'upload' });
+      return { ...result, reading: parsed.reading, warnings: parsed.warnings, closingBalanceMinor: parsed.closingBalanceMinor === undefined ? null : String(parsed.closingBalanceMinor), proposed: run.linesSeen };
+    });
+    // Accept the proposal as it stands, or carry out a decision the person chose.
+    context.actions.register('reconcile.apply', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const lineId = String(params['lineId'] ?? '');
+      let decision: (Decision & { invoiceId?: string; reason?: string }) | null = null;
+      if (params['accept'] === true) {
+        const line = await getStatementLine(ledger(), companyId, lineId);
+        if (!line) throw new Error('Line not found');
+        const p = line.proposal ?? (await propose(ledger(), companyId, line));
+        decision = decisionOf(p);
+      } else if (params['decision'] && typeof params['decision'] === 'object') {
+        decision = params['decision'] as Decision & { invoiceId?: string; reason?: string };
+      }
+      if (!decision) throw new Error('accept: true or a decision is required');
+      return applyDecision(ledger(), companyId, lineId, decision, by);
+    });
+    context.actions.register('reconcile.run', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const threshold = Number(params['threshold'] ?? 90);
+      return runReconciliation(ledger(), companyId, String(params['bankAccountId'] ?? ''), { threshold: Number.isFinite(threshold) ? threshold : 90, by: `board:${by}`, autoPost: params['autoPost'] !== false });
+    });
+    context.actions.register('rule.toggle', async (params, ctx) => {
+      boardOnly(ctx);
+      await setRuleEnabled(ledger(), await companyOf(params), String(params['ruleId'] ?? ''), params['enabled'] !== false);
+      return { ok: true };
+    });
+
+    // Nightly: reconcile every account of every company above the threshold.
+    context.jobs.register('reconcile', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let posted = 0;
+      for (const company of companies) {
+        try {
+          for (const bank of await listBankAccounts(ledger(), company.id)) {
+            const r = await runReconciliation(ledger(), company.id, bank.id, { threshold: 90, by: 'nightly' });
+            posted += r.autoPosted;
+          }
+        } catch (err) {
+          context.logger.error('ledger: nightly reconcile failed', { companyId: company.id, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      context.logger.info('ledger: nightly reconcile done', { runId: job.runId, posted });
     });
     context.logger.info('ledger: ready', { namespace: context.db.namespace });
   },

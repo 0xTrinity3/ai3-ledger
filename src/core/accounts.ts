@@ -20,6 +20,7 @@ export const ACCOUNT = {
   MODEL_INFERENCE: '5000',
   TOOLS_AND_APIS: '5100',
   COMPUTE_AND_SANDBOXES: '5200',
+  PAYMENT_PROCESSING: '5300',
   OTHER_OPERATING: '5900',
 } as const;
 
@@ -35,6 +36,7 @@ export const SEED_ACCOUNTS: readonly SeedAccount[] = [
   { code: ACCOUNT.MODEL_INFERENCE, name: 'Model inference', type: 'expense' },
   { code: ACCOUNT.TOOLS_AND_APIS, name: 'Tools and APIs', type: 'expense' },
   { code: ACCOUNT.COMPUTE_AND_SANDBOXES, name: 'Compute and sandboxes', type: 'expense' },
+  { code: ACCOUNT.PAYMENT_PROCESSING, name: 'Payment processing', type: 'expense' },
   { code: ACCOUNT.OTHER_OPERATING, name: 'Other operating', type: 'expense' },
 ];
 

@@ -11,7 +11,7 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.5.0',
+  version: '0.6.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -48,6 +48,12 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: 'Cost sweep',
       description: 'Posts new Paperclip cost events into the ledger for every company.',
       schedule: '*/15 * * * *',
+    },
+    {
+      jobKey: 'reconcile',
+      displayName: 'Bank reconciliation',
+      description: 'Matches new statement lines to the books and posts everything above the confidence threshold; the rest wait for a person.',
+      schedule: '15 3 * * *',
     },
   ],
   apiRoutes: [

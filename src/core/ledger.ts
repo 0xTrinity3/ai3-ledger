@@ -352,6 +352,8 @@ export interface AccountBalance {
   creditMinor: Minor;
   /** Signed on the account's normal side: positive means "the balance people expect". */
   balanceMinor: Minor;
+  accountId: string;
+  parentId: string | null;
 }
 
 /**
@@ -372,10 +374,12 @@ export async function accountBalances(
     name: string;
     type: AccountType;
     currency: string;
+    parent_id: string | null;
+    account_id: string;
     debit: unknown;
     credit: unknown;
   }>(
-    `SELECT a.code, a.name, a.type, a.currency,
+    `SELECT a.code, a.name, a.type, a.currency, a.parent_id, a.id AS account_id,
             COALESCE(SUM(CASE WHEN e.direction = 'debit'  THEN e.amount_minor END), 0) AS debit,
             COALESCE(SUM(CASE WHEN e.direction = 'credit' THEN e.amount_minor END), 0) AS credit
        FROM ${table(db, 'accounts')} a
@@ -388,7 +392,7 @@ export async function accountBalances(
                AND ($3::timestamptz IS NULL OR t.occurred_at >= $3::timestamptz)
        ) e ON e.account_id = a.id
       WHERE a.company_id = $1
-      GROUP BY a.id, a.code, a.name, a.type, a.currency
+      GROUP BY a.id, a.code, a.name, a.type, a.currency, a.parent_id
       ORDER BY a.code`,
     [companyId, asOfIso, fromIso],
   );
@@ -396,7 +400,7 @@ export async function accountBalances(
     const debit = toMinor(r.debit);
     const credit = toMinor(r.credit);
     const balance = normalSide(r.type) === 'debit' ? debit - credit : credit - debit;
-    return { code: r.code, name: r.name, type: r.type, currency: r.currency, debitMinor: debit, creditMinor: credit, balanceMinor: balance };
+    return { code: r.code, name: r.name, type: r.type, currency: r.currency, accountId: r.account_id, parentId: r.parent_id, debitMinor: debit, creditMinor: credit, balanceMinor: balance };
   });
 }
 

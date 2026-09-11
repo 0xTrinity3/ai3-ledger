@@ -13,7 +13,7 @@
  * screen, so the page never names a company id itself.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { useHostContext, useHostLocation, useHostNavigation, usePluginAction, usePluginData, usePluginToast, ErrorBoundary } from '@paperclipai/plugin-sdk/ui';
+import { useHostContext, useHostLocation, useHostNavigation, usePluginAction, usePluginData, usePluginToast, ErrorBoundary, Spinner } from '@paperclipai/plugin-sdk/ui';
 import type { PluginPageProps, PluginSidebarProps } from '@paperclipai/plugin-sdk/ui';
 
 // ---------------------------------------------------------------------------
@@ -120,6 +120,18 @@ const CSS = `
 .ai3-side:hover { background: var(--sidebar-accent, rgba(127,127,127,.1)); text-decoration: none; }
 .ai3-side.on { background: var(--sidebar-accent, rgba(127,127,127,.14)); font-weight: 600; }
 .ai3-side-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-foreground, #666); padding: 14px 12px 4px; font-weight: 500; }
+.ai3-recon { display: grid; grid-template-columns: minmax(0, 1fr) 56px minmax(0, 1.3fr); gap: 10px; align-items: stretch; }
+.ai3-line { border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 10px 12px; background: var(--background, #fff); min-width: 0; }
+.ai3-okcol { display: flex; align-items: center; justify-content: center; }
+.ai3-prop { border: 1px solid var(--border, #ddd); border-left: 4px solid var(--ai3-green); border-radius: 8px; padding: 10px 12px; background: var(--ai3-green-soft); min-width: 0; }
+.ai3-prop.batch { border-left-color: var(--ai3-green); }
+.ai3-prop.transfer { border-left-color: var(--ai3-green); }
+.ai3-prop.create { border-left-color: var(--ai3-blue); background: var(--ai3-blue-soft); }
+.ai3-prop.ask { border-left-color: var(--ai3-amber); background: var(--ai3-amber-soft); }
+.ai3-prop-kind { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-foreground, #666); margin-bottom: 3px; font-weight: 600; }
+.ai3-conf { color: var(--ai3-green); }
+.ai3-conf.mid { color: var(--ai3-amber); }
+@media (max-width: 700px) { .ai3-recon { grid-template-columns: 1fr; } }
 `;
 
 function useStyles() {
@@ -243,7 +255,7 @@ function Failure({ error }: { error: { message: string } | null | undefined }) {
   return <div className="ai3-card" style={{ borderColor: 'var(--ai3-red)', marginBottom: 14 }}>{error.message}</div>;
 }
 
-function Header({ crumb, title, sub, actions }: { crumb: string; title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
+function Header({ crumb, title, sub, actions }: { crumb: React.ReactNode; title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <>
       <div className="ai3-crumb">Finance › {crumb}</div>
@@ -973,10 +985,375 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
 }
 
 // ---------------------------------------------------------------------------
+// Bank accounts
+// ---------------------------------------------------------------------------
+
+interface BankAccount {
+  id: string; name: string; kind: string; currency: string; feed: string; accountCode: string; externalRef: string | null;
+  ledgerBalanceMinor: string; statementBalanceMinor: string | null; lastLineAt: string | null; unreconciled: number;
+  lastRun: { at: string | null; autoPosted: number; leftForReview: number; linesSeen: number } | null;
+}
+interface Institution { id: string; name: string; kind: string; provider: string; connectionType: string; popular?: boolean }
+interface Proposal {
+  kind: 'match' | 'batch' | 'create' | 'transfer' | 'ask'; confidence: number; reason: string; transactionIds?: string[]; accountCode?: string; contactName?: string;
+  otherBankAccountId?: string; otherLineId?: string; invoiceId?: string; options?: Array<{ label: string; decision: Record<string, unknown> }>;
+}
+interface StatementLine {
+  id: string; postedAt: string; amountMinor: string; description: string; payee: string | null; reference: string | null; status: string; proposal: Proposal | null; reconciledAt: string | null; reconciledBy: string | null;
+}
+
+const KIND_LABEL: Record<string, string> = { bank: 'Bank', card: 'Card', stripe: 'Payment provider', wallet: 'Wallet' };
+const ACCOUNT_CHOICES: Array<{ code: string; name: string; dir: 'in' | 'out' | 'any' }> = [
+  { code: '5000', name: 'Model inference', dir: 'out' },
+  { code: '5100', name: 'Tools and APIs', dir: 'out' },
+  { code: '5200', name: 'Compute and sandboxes', dir: 'out' },
+  { code: '5300', name: 'Payment processing', dir: 'out' },
+  { code: '5900', name: 'Other operating', dir: 'out' },
+  { code: '4000', name: 'Service income', dir: 'in' },
+  { code: '3000', name: 'Contributed funds (owner funding)', dir: 'in' },
+  { code: '2000', name: 'Payables', dir: 'any' },
+];
+
+function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; onDone: () => void; onCancel: () => void }) {
+  const [query, setQuery] = useState('');
+  const [country, setCountry] = useState('US');
+  const [picked, setPicked] = useState<Institution | null>(null);
+  const [name, setName] = useState('');
+  const [manual, setManual] = useState(false);
+  const [kind, setKind] = useState('bank');
+  const institutions = usePluginData<{ institutions: Institution[] }>('feed-institutions', { companyId, query, country });
+  const create = usePluginAction('bank.create');
+  const toast = usePluginToast();
+  const { run, busy } = useRun([]);
+  const list = institutions.data?.institutions ?? [];
+  async function save() {
+    const ok = await run(async () => {
+      const r = (await create({ companyId, institutionId: picked?.id, name: name || picked?.name, kind: picked?.kind ?? kind })) as { feedStatus: string; name: string };
+      if (r.feedStatus !== 'upload') toast({ title: `${r.name} added; feed pending`, body: `The account is ready for uploads. Its feed ${r.feedStatus}.`, tone: 'info', ttlMs: 9000 });
+    }, 'Bank account added');
+    if (ok) onDone();
+  }
+  return (
+    <div className="ai3-card" style={{ marginBottom: 14 }}>
+      <div className="ai3-toolbar">
+        <h3 style={{ margin: 0 }}>Select your account</h3>
+        <div className="ai3-actions">
+          <button className="ai3-btn" onClick={() => { setManual(true); setPicked(null); }}>Add without a feed</button>
+          <button className="ai3-btn" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+      {!manual && !picked && (
+        <>
+          <p className="ai3-note" style={{ marginTop: 0 }}>Search for banks, cards and payment providers. Feeds come through Plaid in the US and TrueLayer or GoCardless in the UK and Europe; Stripe connects with a restricted key.</p>
+          <div className="ai3-form-row">
+            <Field label="Search" style={{ gridColumn: 'span 2' }}><input className="ai3-input" autoFocus placeholder="Mercury, Monzo, Stripe…" value={query} onChange={(e) => setQuery(e.target.value)} /></Field>
+            <Field label="Country">
+              <select className="ai3-select" value={country} onChange={(e) => setCountry(e.target.value)}>
+                <option value="US">United States</option><option value="GB">United Kingdom</option><option value="EU">Europe</option><option value="CA">Canada</option><option value="AU">Australia</option>
+              </select>
+            </Field>
+          </div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{query ? `${list.length} results` : `Popular in ${country === 'US' ? 'the United States' : country === 'GB' ? 'the United Kingdom' : 'your region'}`}</div>
+          <div className="ai3-grid">
+            {list.map((i) => (
+              <button key={i.id} className="ai3-card" style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit' }} onClick={() => { setPicked(i); setName(i.name); }}>
+                <div style={{ fontWeight: 600 }}>{i.name}</div>
+                <div className="ai3-cap">{KIND_LABEL[i.kind] ?? i.kind} · {i.connectionType}{i.provider !== 'upload' && i.provider !== 'stripe' ? ` via ${i.provider}` : ''}</div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {(manual || picked) && (
+        <>
+          {picked && <p className="ai3-note" style={{ marginTop: 0 }}><strong>{picked.name}</strong> · {picked.connectionType}{picked.provider !== 'upload' && picked.provider !== 'stripe' ? ` via ${picked.provider}` : ''}. <a href="#" onClick={(e) => { e.preventDefault(); setPicked(null); }}>Choose another</a></p>}
+          <div className="ai3-form-row">
+            <Field label="Account name"><input className="ai3-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Mercury Checking" /></Field>
+            {manual && (
+              <Field label="Kind">
+                <select className="ai3-select" value={kind} onChange={(e) => setKind(e.target.value)}>
+                  <option value="bank">Bank account</option><option value="card">Card</option><option value="stripe">Payment provider</option><option value="wallet">Wallet</option>
+                </select>
+              </Field>
+            )}
+          </div>
+          <div className="ai3-actions">
+            <button className="ai3-btn primary" disabled={busy || !name.trim()} onClick={save}>{picked && picked.provider !== 'upload' ? 'Add and connect' : 'Add account'}</button>
+          </div>
+          {picked && picked.provider !== 'upload' && <p className="ai3-note">Until the feed is connected, statements can be uploaded to this account. Nothing is lost but convenience.</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function UploadStatement({ companyId, accounts, preselect, onDone }: { companyId: string; accounts: BankAccount[]; preselect?: string; onDone: (bankAccountId: string) => void }) {
+  const importAction = usePluginAction('bank.import');
+  const { run, busy } = useRun([]);
+  const [bankAccountId, setBankAccountId] = useState(preselect ?? accounts[0]?.id ?? '');
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<{ imported: number; duplicates: number; from: string | null; to: string | null; reading: string; warnings: string[]; closingBalanceMinor: string | null } | null>(null);
+  async function upload() {
+    if (!file) return;
+    const content = await file.text();
+    await run(async () => {
+      const r = (await importAction({ companyId, bankAccountId, filename: file.name, content })) as typeof result;
+      setResult(r);
+    }, 'Statement read');
+  }
+  const bank = accounts.find((a) => a.id === bankAccountId);
+  return (
+    <div className="ai3-card" style={{ marginBottom: 14 }}>
+      <h3>Upload a statement <span className="ctx">CSV, OFX, QFX or QBO from any bank</span></h3>
+      {!result ? (
+        <>
+          <div className="ai3-form-row">
+            <Field label="Into">
+              <select className="ai3-select" value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)}>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </Field>
+            <Field label="File"><input className="ai3-input" type="file" accept=".csv,.txt,.ofx,.qfx,.qbo,.tsv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+          </div>
+          <div className="ai3-actions">
+            <button className="ai3-btn primary" disabled={busy || !file || !bankAccountId} onClick={upload}>Read the file</button>
+            <button className="ai3-btn" onClick={() => onDone(bankAccountId)}>Cancel</button>
+          </div>
+          <p className="ai3-note">No column mapping to fill in. The reader works out dates, amounts and descriptions from the file, tells you how it read them, and skips lines already imported.</p>
+        </>
+      ) : (
+        <>
+          <p style={{ margin: '0 0 6px' }}>
+            <strong>{result.imported} line{result.imported === 1 ? '' : 's'} imported</strong>
+            {result.duplicates > 0 ? `, ${result.duplicates} already there` : ''}{result.from ? `, ${dateLong(result.from)} to ${dateLong(result.to)}` : ''}
+            {result.closingBalanceMinor ? `, closing balance ${fmt(result.closingBalanceMinor, { currency: bank?.currency ?? 'USD' })}` : ''}.
+          </p>
+          <p className="ai3-note" style={{ marginTop: 0 }}>Read as: {result.reading}.{result.warnings.length ? ` ${result.warnings.join('; ')}.` : ''}</p>
+          <div className="ai3-actions">
+            <button className="ai3-btn primary" onClick={() => onDone(bankAccountId)}>Go to reconcile</button>
+            <button className="ai3-btn" onClick={() => { setResult(null); setFile(null); }}>Upload another</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function BanksTab({ companyId, company }: { companyId: string; company: Company | null }) {
+  const nav = useHostNavigation();
+  const location = useHostLocation();
+  const banks = usePluginData<{ accounts: BankAccount[] }>('bank-accounts', { companyId });
+  const [adding, setAdding] = useState(new URLSearchParams(location.search).get('add') === '1');
+  const [uploading, setUploading] = useState<string | null>(null);
+  const cur = company?.currency ?? 'USD';
+  const accounts = banks.data?.accounts ?? [];
+  const total = accounts.reduce((s, a) => s + BigInt(a.ledgerBalanceMinor), 0n);
+  return (
+    <>
+      <Header
+        crumb="Bank accounts"
+        title="Bank accounts"
+        sub={accounts.length ? `${fmt(total, { currency: cur })} across ${accounts.length} account${accounts.length === 1 ? '' : 's'}` : 'Where the company’s money actually sits'}
+        actions={
+          <>
+            {accounts.length > 0 && <button className="ai3-btn" onClick={() => setUploading(accounts[0]!.id)}>Upload a statement</button>}
+            <button className="ai3-btn primary" onClick={() => setAdding(true)}>Add bank account</button>
+          </>
+        }
+      />
+      <Failure error={banks.error} />
+      {adding && <AddBankAccount companyId={companyId} onDone={() => { setAdding(false); banks.refresh(); }} onCancel={() => setAdding(false)} />}
+      {uploading && <UploadStatement companyId={companyId} accounts={accounts} preselect={uploading} onDone={(id) => { setUploading(null); banks.refresh(); nav.navigate(`/ledger?tab=reconcile&account=${id}`); }} />}
+      {accounts.length === 0 && !adding ? (
+        <div className="ai3-card"><div className="ai3-empty">No bank accounts yet. Add one, then upload its statement or connect a feed. Stripe counts as a bank account.</div></div>
+      ) : (
+        <div className="ai3-grid two">
+          {accounts.map((a) => {
+            const ledger = BigInt(a.ledgerBalanceMinor);
+            const stmt = a.statementBalanceMinor === null ? null : BigInt(a.statementBalanceMinor);
+            const diff = stmt === null ? null : stmt - ledger;
+            return (
+              <div className="ai3-card" key={a.id}>
+                <div className="ai3-toolbar" style={{ marginBottom: 6 }}>
+                  <h3 style={{ margin: 0 }}>{a.name} <span className={`ai3-badge ${a.feed === 'upload' ? 'draft' : 'issued'}`}>{a.feed === 'upload' ? 'upload' : a.feed === 'stripe' ? 'Stripe feed' : 'feed pending'}</span></h3>
+                  <span className="ai3-cap">{KIND_LABEL[a.kind] ?? a.kind} · {a.accountCode}</span>
+                </div>
+                <div className="ai3-pair">
+                  <div><div className="ai3-big" style={{ fontSize: 20 }}>{fmt(ledger, { currency: a.currency })}</div><div className="ai3-cap">Balance in ledger</div></div>
+                  <div><div className="ai3-big" style={{ fontSize: 20 }}>{stmt === null ? '—' : fmt(stmt, { currency: a.currency })}</div><div className="ai3-cap">{stmt === null ? 'No statement yet' : `Statement balance${a.lastLineAt ? ` (${dateLong(a.lastLineAt)})` : ''}`}</div></div>
+                </div>
+                {diff !== null && diff !== 0n && <div className="ai3-cap" style={{ marginTop: 6 }}>Difference {fmt(diff, { currency: a.currency })}{a.unreconciled ? `, ${a.unreconciled} line${a.unreconciled === 1 ? '' : 's'} not yet reconciled` : ''}</div>}
+                {a.lastRun && <div className="ai3-cap" style={{ marginTop: 4 }}>Last run {dateLong(a.lastRun.at)}: {a.lastRun.autoPosted} posted automatically, {a.lastRun.leftForReview} left for you.</div>}
+                <div className="ai3-actions" style={{ marginTop: 12 }}>
+                  {a.unreconciled > 0 ? (
+                    <a className="ai3-btn primary" {...nav.linkProps(`/ledger?tab=reconcile&account=${a.id}`)}>Reconcile {a.unreconciled} item{a.unreconciled === 1 ? '' : 's'}</a>
+                  ) : stmt === null ? (
+                    <button className="ai3-btn primary" onClick={() => setUploading(a.id)}>Upload a statement</button>
+                  ) : (
+                    <a className="ai3-btn" {...nav.linkProps(`/ledger?tab=reconcile&account=${a.id}`)}>All reconciled · view</a>
+                  )}
+                  {stmt !== null && <button className="ai3-btn" onClick={() => setUploading(a.id)}>Upload</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reconcile
+// ---------------------------------------------------------------------------
+
+const PROPOSAL_LABEL: Record<Proposal['kind'], string> = { match: 'Match', batch: 'Batch match', create: 'Create', transfer: 'Transfer', ask: 'Needs you' };
+
+function ChangePanel({ companyId, line, accounts, currentBankId, onDone }: { companyId: string; line: StatementLine; accounts: BankAccount[]; currentBankId: string; onDone: () => void }) {
+  const applyAction = usePluginAction('reconcile.apply');
+  const { run, busy } = useRun([onDone]);
+  const inflow = BigInt(line.amountMinor) >= 0n;
+  const [mode, setMode] = useState<'create' | 'transfer' | 'exclude'>('create');
+  const [code, setCode] = useState(inflow ? '3000' : '5900');
+  const [desc, setDesc] = useState(line.payee || line.description);
+  const [other, setOther] = useState(accounts.find((a) => a.id !== currentBankId)?.id ?? '');
+  const decide = () => {
+    const decision = mode === 'exclude' ? { kind: 'exclude', reason: 'excluded by the board' } : mode === 'transfer' ? { kind: 'transfer', otherBankAccountId: other } : { kind: 'create', accountCode: code, description: desc };
+    return run(() => applyAction({ companyId, lineId: line.id, decision }), 'Reconciled');
+  };
+  return (
+    <div className="ai3-detail" style={{ marginTop: 6 }}>
+      <div className="ai3-tabs" style={{ marginBottom: 10 }}>
+        {(['create', 'transfer', 'exclude'] as const).map((m) => <button key={m} className={`ai3-tab ${mode === m ? 'on' : ''}`} onClick={() => setMode(m)}>{m === 'create' ? 'Create' : m === 'transfer' ? 'Transfer' : 'Exclude'}</button>)}
+      </div>
+      {mode === 'create' && (
+        <div className="ai3-form-row" style={{ marginBottom: 8 }}>
+          <Field label="What">
+            <select className="ai3-select" value={code} onChange={(e) => setCode(e.target.value)}>
+              {ACCOUNT_CHOICES.filter((a) => a.dir === 'any' || a.dir === (inflow ? 'in' : 'out')).map((a) => <option key={a.code} value={a.code}>{a.code} {a.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Why"><input className="ai3-input" value={desc} onChange={(e) => setDesc(e.target.value)} /></Field>
+        </div>
+      )}
+      {mode === 'transfer' && (
+        <div className="ai3-form-row" style={{ marginBottom: 8 }}>
+          <Field label={inflow ? 'From' : 'To'}>
+            <select className="ai3-select" value={other} onChange={(e) => setOther(e.target.value)}>
+              {accounts.filter((a) => a.id !== currentBankId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </Field>
+        </div>
+      )}
+      {mode === 'exclude' && <p className="ai3-note" style={{ marginTop: 0 }}>The line stays on the statement, marked excluded, and never enters the books. For money that is not the company’s.</p>}
+      <button className="ai3-btn primary" disabled={busy || (mode === 'transfer' && !other)} onClick={decide}>{mode === 'create' ? 'Create and reconcile' : mode === 'transfer' ? 'Record transfer' : 'Exclude'}</button>
+    </div>
+  );
+}
+
+function ReconcileTab({ companyId, company }: { companyId: string; company: Company | null }) {
+  const location = useHostLocation();
+  const nav = useHostNavigation();
+  const accountId = new URLSearchParams(location.search).get('account') ?? '';
+  const banks = usePluginData<{ accounts: BankAccount[] }>('bank-accounts', { companyId });
+  const queue = usePluginData<{ bank: BankAccount; queue: StatementLine[]; recent: StatementLine[]; lastRun: { at: string; autoPosted: number; leftForReview: number; linesSeen: number; threshold: number; ranBy: string } | null }>('reconcile-queue', accountId ? { companyId, bankAccountId: accountId } : { companyId, bankAccountId: '' });
+  const applyAction = usePluginAction('reconcile.apply');
+  const runAction = usePluginAction('reconcile.run');
+  const { run, busy } = useRun([queue.refresh, banks.refresh]);
+  const [changing, setChanging] = useState<string | null>(null);
+  const [showRecent, setShowRecent] = useState(false);
+  const cur = company?.currency ?? 'USD';
+  const accounts = banks.data?.accounts ?? [];
+  const bank = queue.data?.bank;
+  if (!accountId) return <><Header crumb="Reconcile" title="Reconcile" /><div className="ai3-card"><div className="ai3-empty">Pick an account on <a {...nav.linkProps('/ledger?tab=banks')}>Bank accounts</a>.</div></div></>;
+  const items = queue.data?.queue ?? [];
+  const confident = items.filter((l) => l.proposal && l.proposal.kind !== 'ask' && l.proposal.confidence >= 90);
+  return (
+    <>
+      <Header
+        crumb={<>Bank accounts › {bank?.name ?? '…'}</>}
+        title="Reconcile"
+        sub={bank ? `Statement balance ${bank.statementBalanceMinor === null ? '—' : fmt(bank.statementBalanceMinor, { currency: bank.currency })} · Balance in ledger ${fmt(bank.ledgerBalanceMinor, { currency: bank.currency })}` : undefined}
+        actions={
+          <>
+            <a className="ai3-btn" {...nav.linkProps(`/ledger?tab=banks`)}>Bank accounts</a>
+            <button className="ai3-btn" disabled={busy || confident.length === 0} onClick={() => run(() => runAction({ companyId, bankAccountId: accountId, threshold: 90 }), 'Confident matches posted')}>Accept all {confident.length ? `(${confident.length})` : ''} at 90%+</button>
+          </>
+        }
+      />
+      <Failure error={queue.error ?? banks.error} />
+      {queue.data?.lastRun && (
+        <div className="ai3-card" style={{ marginBottom: 14, background: 'var(--ai3-green-soft)', borderColor: 'transparent' }}>
+          <strong>{queue.data.lastRun.ranBy === 'nightly' ? 'Reconciled overnight' : 'Last run'}: {queue.data.lastRun.autoPosted} of {queue.data.lastRun.linesSeen} posted automatically at {queue.data.lastRun.threshold}%.</strong>{' '}
+          {items.length} need{items.length === 1 ? 's' : ''} you. <a href="#" onClick={(e) => { e.preventDefault(); setShowRecent((v) => !v); }}>{showRecent ? 'Hide' : 'Review'} what was posted</a>
+        </div>
+      )}
+      {queue.loading && !queue.data && <div className="ai3-card"><Spinner /></div>}
+      {queue.data && items.length === 0 && <div className="ai3-card"><div className="ai3-empty">Everything on this account is reconciled. <button className="ai3-btn" style={{ marginLeft: 8 }} onClick={() => nav.navigate('/ledger?tab=banks')}>Upload another statement</button></div></div>}
+      {items.map((line) => {
+        const p = line.proposal;
+        const amt = BigInt(line.amountMinor);
+        const tone = !p ? 'ask' : p.kind;
+        return (
+          <div className="ai3-card" key={line.id} style={{ marginBottom: 10, padding: '12px 14px' }}>
+            <div className="ai3-recon">
+              <div className="ai3-line">
+                <div className="ai3-cap">{dateLong(line.postedAt)}{line.reference ? ` · ref ${line.reference}` : ''}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 600 }}>
+                  <span>{line.payee || line.description}</span>
+                  <span className="ai3-num" style={{ color: amt < 0n ? undefined : 'var(--ai3-green)' }}>{amt < 0n ? '−' : '+'}{fmt(amt < 0n ? -amt : amt, { currency: cur })}</span>
+                </div>
+                {line.payee && line.payee !== line.description && <div className="ai3-cap">{line.description}</div>}
+              </div>
+              <div className="ai3-okcol">
+                {p && p.kind !== 'ask' ? (
+                  <button className="ai3-btn primary" disabled={busy} title="Accept the proposal" onClick={() => run(() => applyAction({ companyId, lineId: line.id, accept: true }), 'Reconciled')}>OK</button>
+                ) : (
+                  <span className="ai3-badge part_paid">?</span>
+                )}
+              </div>
+              <div className={`ai3-prop ${tone}`}>
+                <div className="ai3-prop-kind">
+                  <span>{p ? PROPOSAL_LABEL[p.kind] : 'Thinking…'}{p?.kind === 'batch' && p.transactionIds ? ` · ${p.transactionIds.length} cost events` : ''}</span>
+                  {p && <span className={`ai3-conf ${p.confidence < 75 ? 'mid' : ''}`}>{p.confidence}%</span>}
+                </div>
+                {p?.kind === 'create' && <div>{p.invoiceId ? `Payment on an invoice · ${p.contactName ?? ''}` : `${p.accountCode} ${ACCOUNT_CHOICES.find((a) => a.code === p.accountCode)?.name ?? ''}${p.contactName ? ` · ${p.contactName}` : ''}`}</div>}
+                {p?.kind === 'transfer' && <div>{accounts.find((a) => a.id === p.otherBankAccountId)?.name ?? 'another account'}</div>}
+                {p && <div className="ai3-cap" style={{ marginTop: 3 }}>{p.reason}</div>}
+                {p?.kind === 'ask' && p.options && (
+                  <div className="ai3-actions" style={{ marginTop: 8 }}>
+                    {p.options.map((o) => <button key={o.label} className="ai3-btn small" disabled={busy} onClick={() => run(() => applyAction({ companyId, lineId: line.id, decision: o.decision }), 'Reconciled')}>{o.label}</button>)}
+                  </div>
+                )}
+                <div style={{ marginTop: 6 }}><a href="#" onClick={(e) => { e.preventDefault(); setChanging(changing === line.id ? null : line.id); }}>{changing === line.id ? 'Close' : 'Change'}</a></div>
+              </div>
+            </div>
+            {changing === line.id && <ChangePanel companyId={companyId} line={line} accounts={accounts} currentBankId={accountId} onDone={() => { setChanging(null); queue.refresh(); banks.refresh(); }} />}
+          </div>
+        );
+      })}
+      {showRecent && queue.data && (
+        <div className="ai3-card" style={{ marginTop: 14 }}>
+          <h3>Recently reconciled</h3>
+          <table className="ai3-table">
+            <thead><tr><th>Date</th><th>Line</th><th>How</th><th>By</th><th className="num">Amount</th></tr></thead>
+            <tbody>
+              {queue.data.recent.map((l) => (
+                <tr key={l.id}><td className="muted">{dateLong(l.postedAt)}</td><td>{l.payee || l.description}{l.proposal ? <div className="ai3-cap">{l.proposal.reason}</div> : null}</td><td><span className={`ai3-badge ${l.status === 'excluded' ? 'void' : 'paid'}`}>{l.status}</span></td><td className="muted">{l.reconciledBy ?? ''}</td><td className="num">{fmt(l.amountMinor, { currency: cur })}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page + sidebar
 // ---------------------------------------------------------------------------
 
-const TABS = ['position', 'transactions', 'invoices', 'statements'] as const;
+const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'statements'] as const;
 type Tab = (typeof TABS)[number];
 
 function tabFromSearch(search: string): Tab {
@@ -999,6 +1376,8 @@ export function LedgerPage(_props: PluginPageProps) {
         {tab === 'transactions' && <TransactionsTab companyId={companyId} company={company.data} />}
         {tab === 'invoices' && <InvoicesTab companyId={companyId} company={company.data} />}
         {tab === 'statements' && <StatementsTab companyId={companyId} company={company.data} />}
+        {tab === 'banks' && <BanksTab companyId={companyId} company={company.data} />}
+        {tab === 'reconcile' && <ReconcileTab companyId={companyId} company={company.data} />}
         <p className="ai3-note" style={{ marginTop: 28 }}>AI3 Ledger · double-entry, append-only, integer minor units. Costs come from Paperclip; nothing is re-derived.</p>
       </div>
     </ErrorBoundary>
@@ -1007,6 +1386,7 @@ export function LedgerPage(_props: PluginPageProps) {
 
 const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, search: string) => boolean }> = [
   { label: 'Position', to: '/ledger', match: (p, s) => p.endsWith('/ledger') && !new URLSearchParams(s).get('tab') },
+  { label: 'Bank accounts', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && ['banks', 'reconcile'].includes(new URLSearchParams(s).get('tab') ?? '') },
   { label: 'Transactions', to: '/ledger?tab=transactions', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'transactions' },
   { label: 'Invoices', to: '/ledger?tab=invoices', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'invoices' },
   { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') },

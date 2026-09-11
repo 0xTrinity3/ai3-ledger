@@ -50,7 +50,9 @@ export async function position(db: LedgerDb, companyId: string, now: Date = new 
     trialBalance(db, companyId),
   ]);
 
-  const treasury = code(all, ACCOUNT.TREASURY);
+  // Treasury is the control account plus every bank sub-account under it.
+  const treasuryRow = all.find((r) => r.code === ACCOUNT.TREASURY);
+  const treasury = all.filter((r) => r.code === ACCOUNT.TREASURY || (treasuryRow && r.parentId === treasuryRow.accountId)).reduce((s, r) => s + r.balanceMinor, 0n);
   const income = sumType(mtd, 'income');
   const expense = sumType(mtd, 'expense');
   const trailingExpense = sumType(trailing, 'expense');
