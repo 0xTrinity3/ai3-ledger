@@ -6,24 +6,42 @@
  * core runs unchanged inside the plugin, against a test database, and against
  * a hosted PostgreSQL in connected mode.
  *
- * Because there is no transaction API, every write that must be atomic is a
- * single statement. See `ledger.ts` for how a transaction and all of its
- * entries are inserted in one CTE.
+ * Two posting strategies exist because hosts differ in what SQL they accept:
+ *
+ *  - `function`   (default) calls `ledger_post(...)`, one atomic statement.
+ *                 Used wherever we own the database (tests, connected mode).
+ *  - `statements` never calls a function and never runs more than one plain
+ *                 INSERT/UPDATE/DELETE per call. Paperclip's plugin sandbox
+ *                 forbids functions, triggers and multi-statement SQL, so the
+ *                 transaction row is written as 'pending', its entries follow,
+ *                 and a final UPDATE flips it to 'posted'. Reports only ever
+ *                 count 'posted' rows, so a half-written transaction is
+ *                 invisible and is swept away later.
  */
+import { randomUUID } from 'node:crypto';
+
 export interface SqlClient {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
   execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }>;
 }
 
+export type PostingMode = 'function' | 'statements';
+
 /** Where the ledger's tables live. `schema` is optional: the host may set search_path instead. */
 export interface LedgerDb {
   sql: SqlClient;
   schema?: string;
+  posting?: PostingMode;
 }
 
 /** Qualify a table name with the schema when one is configured. */
 export function table(db: LedgerDb, name: string): string {
   return db.schema ? `"${db.schema.replace(/"/g, '""')}".${name}` : name;
+}
+
+/** A fresh v4 UUID for hosts that cannot return generated ids (execute reports only rowCount). */
+export function newId(): string {
+  return randomUUID();
 }
 
 // ---------------------------------------------------------------------------
@@ -64,4 +82,9 @@ export function assertCurrency(value: unknown): string {
     throw new TypeError(`ledger: currency must be a three-letter code, got ${String(value)}`);
   }
   return value;
+}
+
+/** Normalise a Date or ISO string to an ISO string for a timestamptz parameter. */
+export function toIso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : value;
 }

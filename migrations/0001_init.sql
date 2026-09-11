@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   reverses_id     uuid NULL REFERENCES transactions(id),
   created_by      text NOT NULL DEFAULT 'system',
   created_at      timestamptz NOT NULL DEFAULT now(),
+  -- 'pending' exists for hosts whose SQL API cannot write a transaction and its
+  -- entries in one statement (the Paperclip plugin sandbox). Reports only ever
+  -- count 'posted' rows. ledger_post() writes 'posted' directly.
+  status          text NOT NULL DEFAULT 'posted' CHECK (status IN ('pending','posted')),
   UNIQUE (public_id)
 );
 

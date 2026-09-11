@@ -31,10 +31,17 @@ export interface CostRecord {
   subject?: Subject;
 }
 
-/** An opaque, resumable position in a platform's cost stream. */
+/**
+ * An opaque, resumable position in a platform's cost stream.
+ *
+ * `lastOccurredAt` is a timestamp literal as text (whatever the platform's
+ * database prints for `::text`), never a JS Date: a Date keeps milliseconds,
+ * PostgreSQL keeps microseconds, and a cursor that loses precision re-reads
+ * the same tail on every sweep.
+ */
 export interface CostCursor {
   lastEventRef: string | null;
-  lastOccurredAt: Date | null;
+  lastOccurredAt: string | null;
 }
 
 export interface CostBatch {
