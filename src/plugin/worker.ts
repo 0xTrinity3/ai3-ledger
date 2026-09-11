@@ -347,11 +347,120 @@ const plugin = definePlugin({
       context.logger.info('ledger: sweep starting', { runId: job.runId, trigger: job.trigger });
       await sweepAll();
     });
-    context.data.register('position', async (params) => {
+    // Data providers for the page. The host injects the company it has
+    // authorised as params.companyId, overriding anything the page sent.
+    const companyOf = async (params: Record<string, unknown>): Promise<string> => {
       const companyId = typeof params['companyId'] === 'string' ? params['companyId'] : null;
       if (!companyId) throw new Error('companyId is required');
       await seedAccounts(ledger(), companyId, CURRENCY);
-      return position(ledger(), companyId);
+      return companyId;
+    };
+    const s = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+    context.data.register('position', async (params) => position(ledger(), await companyOf(params)));
+    context.data.register('transactions', async (params) => {
+      const companyId = await companyOf(params);
+      const limit = Number(params['limit'] ?? 100);
+      return { companyId, transactions: await listTransactions(ledger(), companyId, { limit: Number.isFinite(limit) ? limit : 100, ...(s(params['agentRef']) ? { agentRef: s(params['agentRef'])! } : {}) }) };
+    });
+    context.data.register('invoices', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, invoices: await listInvoices(ledger(), companyId, { limit: 200 }) };
+    });
+    context.data.register('customers', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, customers: await listCustomers(ledger(), companyId) };
+    });
+    context.data.register('periods', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, periods: await listPeriods(ledger(), companyId) };
+    });
+    context.data.register('pnl', async (params) => {
+      const companyId = await companyOf(params);
+      const g = s(params['groupBy']);
+      const groupBy = g === 'agent' || g === 'project' || g === 'goal' ? (g as GroupBy) : null;
+      let from = s(params['from']);
+      let to = s(params['to']);
+      const periodId = s(params['periodId']);
+      if (periodId) {
+        const p = await getPeriod(ledger(), companyId, periodId);
+        if (!p) throw new Error('Period not found');
+        from = `${p.startsOn}T00:00:00.000Z`;
+        to = `${p.endsOn}T23:59:59.999Z`;
+      }
+      const now = new Date();
+      return profitAndLoss(ledger(), companyId, { from: from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString(), to: to ?? now.toISOString() }, groupBy);
+    });
+    context.data.register('balance-sheet', async (params) => balanceSheet(ledger(), await companyOf(params), s(params['asOf']) ?? new Date()));
+
+    // Actions from the page. The board (a signed-in person) only; the host
+    // tells us who is calling.
+    const boardOnly = (ctx: { actor: { type: string; userId: string | null } }): string => {
+      if (ctx.actor.type !== 'user') throw new Error('Only the board can do that');
+      return ctx.actor.userId ?? 'board';
+    };
+    const amountOf = (v: unknown): bigint => {
+      const n = toMinor(v);
+      if (n <= 0n) throw new Error('amount must be positive');
+      return n;
+    };
+    context.actions.register('sweep', async (params, ctx) => {
+      boardOnly(ctx);
+      return sweepCompany(await companyOf(params));
+    });
+    context.actions.register('funding', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const amount = amountOf(params['amountMinor']);
+      return postTransaction(ledger(), {
+        companyId,
+        occurredAt: s(params['occurredAt']) ?? new Date().toISOString(),
+        description: s(params['description']) ?? 'Funding',
+        sourcePlatform: 'manual',
+        sourceKind: 'funding',
+        sourceRef: s(params['reference']) ?? null,
+        currency: CURRENCY,
+        createdBy: by,
+        entries: [
+          { accountCode: ACCOUNT.TREASURY, direction: 'debit', amountMinor: amount },
+          { accountCode: ACCOUNT.CONTRIBUTED_FUNDS, direction: 'credit', amountMinor: amount },
+        ],
+      });
+    });
+    context.actions.register('customer.create', async (params, ctx) => {
+      boardOnly(ctx);
+      return createCustomer(ledger(), await companyOf(params), { name: String(params['name'] ?? ''), email: s(params['email']) ?? null });
+    });
+    context.actions.register('invoice.create', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const lines = Array.isArray(params['lines']) ? (params['lines'] as Array<Record<string, unknown>>) : [];
+      return createInvoice(ledger(), await companyOf(params), {
+        customerId: String(params['customerId'] ?? ''),
+        currency: CURRENCY,
+        createdBy: by,
+        lines: lines.map((x) => ({ description: String(x['description'] ?? ''), quantity: typeof x['quantity'] === 'number' || typeof x['quantity'] === 'string' ? x['quantity'] : 1, unitAmountMinor: String(x['unitAmountMinor'] ?? '') })),
+      });
+    });
+    context.actions.register('invoice.issue', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      return issueInvoice(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { createdBy: by });
+    });
+    context.actions.register('invoice.payment', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      return recordPayment(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { amountMinor: amountOf(params['amountMinor']), reference: s(params['reference']) ?? null, createdBy: by });
+    });
+    context.actions.register('invoice.writeoff', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      return writeOffInvoice(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { createdBy: by });
+    });
+    context.actions.register('period.create', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const month = s(params['month']);
+      return month ? ensureMonth(ledger(), companyId, month) : createPeriod(ledger(), companyId, { startsOn: String(params['startsOn'] ?? ''), endsOn: String(params['endsOn'] ?? '') });
+    });
+    context.actions.register('period.close', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      return closePeriod(ledger(), await companyOf(params), String(params['periodId'] ?? ''), by);
     });
     context.logger.info('ledger: ready', { namespace: context.db.namespace });
   },

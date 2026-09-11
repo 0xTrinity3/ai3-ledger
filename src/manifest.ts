@@ -11,7 +11,7 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.4.0',
+  version: '0.5.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -24,9 +24,18 @@ const manifest: PaperclipPluginManifestV1 = {
     'database.namespace.migrate',
     'jobs.schedule',
     'api.routes.register',
+    'ui.page.register',
+    'ui.sidebar.register',
   ],
   entrypoints: {
     worker: 'dist/plugin/worker.js',
+    ui: 'dist/ui',
+  },
+  ui: {
+    slots: [
+      { type: 'page', id: 'ledger-page', displayName: 'Ledger', exportName: 'LedgerPage', routePath: 'ledger', order: 10 },
+      { type: 'sidebar', id: 'ledger-nav', displayName: 'Ledger', exportName: 'LedgerSidebarItem', order: 10 },
+    ],
   },
   database: {
     namespaceSlug: 'ai3_ledger',
