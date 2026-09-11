@@ -370,6 +370,22 @@ const plugin = definePlugin({
       const companyId = await companyOf(params);
       return { companyId, customers: await listCustomers(ledger(), companyId) };
     });
+    context.data.register('invoice', async (params) => {
+      const companyId = await companyOf(params);
+      const inv = await getInvoice(ledger(), companyId, String(params['invoiceId'] ?? ''));
+      if (!inv) throw new Error('Invoice not found');
+      return inv;
+    });
+    // Who the company is, for report headers. Cached for the worker's life.
+    const companyNames = new Map<string, string>();
+    context.data.register('company', async (params) => {
+      const companyId = await companyOf(params);
+      if (!companyNames.has(companyId)) {
+        const all = await context.companies.list({ limit: 500 });
+        for (const c of all) companyNames.set(c.id, c.name);
+      }
+      return { companyId, name: companyNames.get(companyId) ?? 'Company', currency: CURRENCY };
+    });
     context.data.register('periods', async (params) => {
       const companyId = await companyOf(params);
       return { companyId, periods: await listPeriods(ledger(), companyId) };
@@ -437,16 +453,26 @@ const plugin = definePlugin({
         customerId: String(params['customerId'] ?? ''),
         currency: CURRENCY,
         createdBy: by,
+        dueAt: s(params['dueAt']) ?? null,
         lines: lines.map((x) => ({ description: String(x['description'] ?? ''), quantity: typeof x['quantity'] === 'number' || typeof x['quantity'] === 'string' ? x['quantity'] : 1, unitAmountMinor: String(x['unitAmountMinor'] ?? '') })),
       });
     });
     context.actions.register('invoice.issue', async (params, ctx) => {
       const by = boardOnly(ctx);
-      return issueInvoice(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { createdBy: by });
+      return issueInvoice(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { createdBy: by, ...(s(params['issuedAt']) ? { issuedAt: s(params['issuedAt'])! } : {}) });
     });
     context.actions.register('invoice.payment', async (params, ctx) => {
       const by = boardOnly(ctx);
-      return recordPayment(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), { amountMinor: amountOf(params['amountMinor']), reference: s(params['reference']) ?? null, createdBy: by });
+      return recordPayment(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''), {
+        amountMinor: amountOf(params['amountMinor']),
+        reference: s(params['reference']) ?? null,
+        createdBy: by,
+        ...(s(params['occurredAt']) ? { occurredAt: s(params['occurredAt'])! } : {}),
+      });
+    });
+    context.actions.register('invoice.void', async (params, ctx) => {
+      boardOnly(ctx);
+      return voidInvoice(ledger(), await companyOf(params), String(params['invoiceId'] ?? ''));
     });
     context.actions.register('invoice.writeoff', async (params, ctx) => {
       const by = boardOnly(ctx);
