@@ -708,7 +708,7 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
         <div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>How to pay <span className="ai3-cap" style={{ display: 'inline' }}>· printed on the invoice</span></div>
           {available.length === 0 ? (
-            <p className="ai3-note" style={{ marginTop: 0 }}>No payment options saved yet. <a {...nav.linkProps('/ledger?tab=settings')}>Add a bank account, a Stripe link or a wallet</a> and they will appear here.</p>
+            <p className="ai3-note" style={{ marginTop: 0 }}>No payment options saved yet. <a {...nav.linkProps('/company/settings/finance')}>Add a bank account, a Stripe link or a wallet</a> and they will appear here.</p>
           ) : (
             available.map((m) => (
               <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', cursor: 'pointer' }}>
@@ -1833,6 +1833,22 @@ export function LedgerPage(_props: PluginPageProps) {
   );
 }
 
+/** Finance inside the company's own Settings, beside Members and Secrets. */
+export function LedgerCompanySettings(_props: PluginPageProps) {
+  useStyles();
+  const context = useHostContext();
+  const companyId = context.companyId;
+  const company = usePluginData<Company>('company', companyId ? { companyId } : {});
+  if (!companyId) return <div className="ai3">Pick a company.</div>;
+  return (
+    <ErrorBoundary>
+      <div className="ai3">
+        <SettingsTab companyId={companyId} company={company.data} />
+      </div>
+    </ErrorBoundary>
+  );
+}
+
 const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, search: string) => boolean }> = [
   { label: 'Position', to: '/ledger', match: (p, s) => p.endsWith('/ledger') && !new URLSearchParams(s).get('tab') },
   { label: 'Bank accounts', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && ['banks', 'reconcile'].includes(new URLSearchParams(s).get('tab') ?? '') },
@@ -1841,7 +1857,7 @@ const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, se
   { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') },
   { label: 'Balance sheet', to: '/ledger?tab=statements&view=balance', match: (p, s) => p.endsWith('/ledger') && s.includes('view=balance') },
   { label: 'Costs', to: '/costs', match: (p) => p.endsWith('/costs') },
-  { label: 'Settings', to: '/ledger?tab=settings', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'settings' },
+  { label: 'Settings', to: '/company/settings/finance', match: (p) => p.endsWith('/company/settings/finance') },
 ];
 
 export function LedgerSidebarItem(_props: PluginSidebarProps) {
