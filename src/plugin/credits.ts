@@ -119,6 +119,9 @@ export interface WalletOffer {
 }
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+// A mint comes from the zero address, which sends nothing and owns nothing.
+// Live tenant data carries such lines, so the offer has to exclude it.
+const ZERO = `0x${'0'.repeat(40)}`;
 
 /**
  * Addresses that paid for credits and are not already watched. Newest first,
@@ -130,7 +133,7 @@ export function walletOffers(view: CreditsView, watched: Iterable<string> = []):
   for (const e of view.entries) {
     const from = (e as CreditsEntry & { from?: { address?: string; chainRef?: string | null; txHash?: string | null; at?: string | null } }).from;
     const address = String(from?.address ?? '').toLowerCase();
-    if (!ADDRESS.test(address) || already.has(address)) continue;
+    if (!ADDRESS.test(address) || address === ZERO || already.has(address)) continue;
     const amount = /^-?\d+$/.test(String(e.amountMinor)) ? BigInt(e.amountMinor) : 0n;
     const seen = byAddress.get(address);
     if (seen) {

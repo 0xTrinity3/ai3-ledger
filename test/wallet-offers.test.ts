@@ -70,6 +70,11 @@ describe('which wallets get offered', () => {
     expect(offers[0]).toMatchObject({ amountMinor: '5000', topUps: 2, txHash: '0xnew' });
   });
 
+  it('never offers the zero address, which is where a mint comes from', () => {
+    // Live tenant data carries faucet mints with payee 0x000…000.
+    expect(walletOffers(view([entry({ from: { address: `0x${'0'.repeat(40)}`, chainRef: 'tempo', txHash: '0x1', at: null } })]))).toEqual([]);
+  });
+
   it('ignores an address that is not an address', () => {
     expect(walletOffers(view([entry({ from: { address: 'not-an-address', chainRef: 'tempo', txHash: '0x1', at: null } })]))).toEqual([]);
   });
