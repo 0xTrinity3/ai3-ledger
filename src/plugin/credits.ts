@@ -87,3 +87,63 @@ export async function syncCredits(db: LedgerDb, fetch: FetchLike, settings: Comp
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Crypto top-ups: the wallet the money came from
+// ---------------------------------------------------------------------------
+
+/**
+ * A card top-up tells you the issuer's country. A crypto top-up tells you the
+ * account — a public ledger has no choice but to name it — and the transfer
+ * itself is signed by that account, so watching it needs no further proof.
+ *
+ * That makes the top-up the cheapest possible on-ramp to reconciliation: the
+ * money the company just spent is the first line it ever sees matched. It is
+ * offered, never assumed: watching an address imports everything it does into
+ * the company's books, and a personal wallet's history does not belong there.
+ *
+ * Until the wallet is watched (or its export uploaded), a crypto top-up is
+ * real at ai3.co and absent from the books — syncCredits deliberately leaves
+ * it to the chain feed, which cannot see a wallet nobody is watching. The
+ * offer says so.
+ */
+export interface WalletOffer {
+  address: string;
+  /** The bank-account ref prefix ai3.co saw it on ('tempo', 'base'); the caller maps it to a chain. */
+  chainRef: string | null;
+  txHash: string | null;
+  amountMinor: string;
+  at: string | null;
+  /** How many top-ups came from this address, when it is more than one. */
+  topUps: number;
+}
+
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Addresses that paid for credits and are not already watched. Newest first,
+ * one entry per address, with the total it has topped up.
+ */
+export function walletOffers(view: CreditsView, watched: Iterable<string> = []): WalletOffer[] {
+  const already = new Set([...watched].map((a) => String(a).toLowerCase()));
+  const byAddress = new Map<string, WalletOffer>();
+  for (const e of view.entries) {
+    const from = (e as CreditsEntry & { from?: { address?: string; chainRef?: string | null; txHash?: string | null; at?: string | null } }).from;
+    const address = String(from?.address ?? '').toLowerCase();
+    if (!ADDRESS.test(address) || already.has(address)) continue;
+    const amount = /^-?\d+$/.test(String(e.amountMinor)) ? BigInt(e.amountMinor) : 0n;
+    const seen = byAddress.get(address);
+    if (seen) {
+      seen.amountMinor = (BigInt(seen.amountMinor) + amount).toString();
+      seen.topUps += 1;
+      // Keep the most recent transfer as the one that proves the address.
+      if (!seen.at || (from?.at && from.at > seen.at)) { seen.at = from?.at ?? seen.at; seen.txHash = from?.txHash ?? seen.txHash; }
+    } else {
+      byAddress.set(address, {
+        address, chainRef: from?.chainRef ?? null, txHash: from?.txHash ?? null,
+        amountMinor: amount.toString(), at: from?.at ?? e.at ?? null, topUps: 1,
+      });
+    }
+  }
+  return [...byAddress.values()].sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')));
+}

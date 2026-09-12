@@ -147,7 +147,17 @@ export interface ConnectedWallet {
   currency: string;
   hasCredentials: boolean;
   /** the ownership signature for an address wallet, when one was given */
-  proof: { message: string; signature: string; at: string } | null;
+  /**
+   * How the company showed the address is theirs. A signed message is the
+   * usual way. A credit top-up is the other: paying ai3.co from that address
+   * is itself a transaction signed by it, so the transfer stands in for the
+   * signature — `via` says which assurance this is, rather than implying a
+   * local signature check that did not happen.
+   */
+  proof:
+    | { message: string; signature: string; at: string }
+    | { via: 'ai3-credit-top-up'; txHash: string; amountMinor: string; memo: string | null; at: string }
+    | null;
   bankAccountId: string | null;
   cursor: Record<string, unknown> | null;
   lastSyncAt: string | null;

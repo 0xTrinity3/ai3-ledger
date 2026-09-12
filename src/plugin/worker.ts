@@ -70,6 +70,7 @@ import {
   dueReminders,
   reminderEmail,
   getWallet,
+  listConnectedWallets,
   listDisputes,
   updateDispute,
   type PaymentKind,
@@ -94,6 +95,7 @@ import { bookBrowserPayment, connectAddressWallet, connectExchangeAccount, conne
 import { registerBooks } from './books.js';
 import { connectStripe, refreshStripe, syncStripeFeed, stripeStatus } from './stripe.js';
 import { bankFeedView, syncBankFeeds } from './banks.js';
+import { walletOffers, type WalletOffer } from './credits.js';
 import { getStripeLink } from '../core/index.js';
 
 const CURRENCY = 'USD';
@@ -1062,6 +1064,37 @@ const plugin = definePlugin({
       const companyId = await companyOf(params);
       return { companyId, wallets: await connectedWalletsView(ledger(), companyId) };
     });
+    /**
+      * Wallets that paid ai3.co for credits and are not watched yet. The
+      * top-up is the on-ramp: the money the company just spent is the first
+      * line it sees reconcile itself, and the transfer proves the address
+      * without anyone signing anything. Offered, not assumed — watching an
+      * address brings everything it does into the books.
+      */
+    context.data.register('wallet-offers', async (params) => {
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      if (!isConnected(settings)) return { companyId, offers: [], connected: false };
+      let offers: WalletOffer[] = [];
+      let error: string | null = null;
+      try {
+        const view = await fetchCredits(httpFetch, settings, companyId);
+        const watched = (await listConnectedWallets(ledger(), companyId)).filter((w) => w.address !== null).map((w) => w.address as string);
+        const own = await getWallet(ledger(), companyId);
+        offers = walletOffers(view, [...watched, ...(own?.address ? [own.address] : [])]);
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+      // The chain a ref prefix belongs to, so the page can name it and connect it.
+      const chainFor = (ref: string | null) => Object.values(CHAINS).find((c) => c.refPrefix === ref) ?? null;
+      return {
+        companyId, connected: true, error,
+        offers: offers.map((o) => {
+          const chain = chainFor(o.chainRef);
+          return { ...o, network: chain?.slug ?? null, chainName: chain?.name ?? null, explorer: chain ? `${chain.explorer}/address/${o.address}` : null };
+        }),
+      };
+    });
     context.data.register('ownership-message', async (params) => {
       const companyId = await companyOf(params);
       const address = String(params['address'] ?? '');
@@ -1072,9 +1105,22 @@ const plugin = definePlugin({
       const by = boardOnly(ctx);
       const companyId = await companyOf(params);
       const proof = params['proof'] && typeof params['proof'] === 'object' ? (params['proof'] as { message?: unknown; signature?: unknown }) : null;
+      // A top-up stands in for the signature, but only one ai3.co actually
+      // reported: the page sends the address, and the offer is looked up here
+      // rather than trusted from the request.
+      const address = String(params['address'] ?? '');
+      let topUp: { txHash: string; amountMinor: string; memo?: string | null } | null = null;
+      if (params['viaTopUp'] === true) {
+        const settings = await getSettings(ledger(), companyId, CURRENCY);
+        const view = await fetchCredits(httpFetch, settings, companyId);
+        const offer = walletOffers(view).find((o) => o.address === address.toLowerCase());
+        if (!offer?.txHash) throw new Error('ai3.co has no credit top-up from that address, so it cannot stand in for a signature');
+        topUp = { txHash: offer.txHash, amountMinor: offer.amountMinor, memo: view.memo };
+      }
       const r = await connectAddressWallet(ledger(), companyId, {
-        label: s(params['label']) ?? null, network: String(params['network'] ?? ''), address: String(params['address'] ?? ''),
+        label: s(params['label']) ?? null, network: String(params['network'] ?? ''), address,
         proof: proof && typeof proof.message === 'string' && typeof proof.signature === 'string' ? { message: proof.message, signature: proof.signature } : null,
+        topUp,
         sinceDays: Number(params['sinceDays'] ?? 0) || 0,
       }, by);
       return { ...r.wallet, chain: chainSummary(r.chain), proven: r.proven };

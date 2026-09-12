@@ -1807,6 +1807,8 @@ function ConnectExchangeForm({ companyId, institution, onDone, onBack }: { compa
   );
 }
 
+interface WalletOffer { address: string; chainRef: string | null; txHash: string | null; amountMinor: string; at: string | null; topUps: number; network: string | null; chainName: string | null; explorer: string | null }
+
 interface BankFeedsView {
   ai3Connected: boolean;
   providers: { plaid: boolean; gocardless: boolean } | null;
@@ -1988,11 +1990,13 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
   const banks = usePluginData<{ accounts: BankAccount[] }>('bank-accounts', { companyId });
   const connected = usePluginData<{ wallets: ConnectedWallet[] }>('connected-wallets', { companyId });
   const feeds = usePluginData<BankFeedsView>('bank-feeds', { companyId });
+  const offers = usePluginData<{ connected: boolean; error: string | null; offers: WalletOffer[] }>('wallet-offers', { companyId });
   const feedSync = usePluginAction('feed.sync');
+  const connectWallet = usePluginAction('wallet.connect');
   const bankSync = usePluginAction('bank.sync');
   const disconnect = usePluginAction('wallet.disconnect');
   const toast = usePluginToast();
-  const { run: runFeed, busy: feedBusy } = useRun([banks.refresh, connected.refresh, feeds.refresh]);
+  const { run: runFeed, busy: feedBusy } = useRun([banks.refresh, connected.refresh, feeds.refresh, offers.refresh]);
   const walletFor = (bankId: string) => (connected.data?.wallets ?? []).find((w) => w.bankAccountId === bankId) ?? null;
   // The bank behind an aggregator account, so a live feed does not read as pending.
   const connFor = (bankId: string) => {
@@ -2018,6 +2022,29 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
         }
       />
       <Failure error={banks.error} />
+      {(offers.data?.offers ?? []).map((o) => (
+        <div className="ai3-card" key={o.address} style={{ marginBottom: 14, borderLeft: '3px solid #1f6fcf' }}>
+          <h3 style={{ marginTop: 0 }}>You topped up model credits from a wallet this company does not watch</h3>
+          <p className="ai3-note" style={{ marginTop: 0 }}>
+            {fmt(o.amountMinor, { currency: cur })}{o.topUps > 1 ? ` over ${o.topUps} top-ups` : ''} came from{' '}
+            {o.explorer ? <a href={o.explorer} target="_blank" rel="noreferrer">{o.address}</a> : <code>{o.address}</code>}
+            {o.chainName ? ` on ${o.chainName}` : ''}. Paying from that address signed a transaction with it, so watching it needs no further proof —
+            nothing to sign, no bank to authorise.
+          </p>
+          <p className="ai3-note" style={{ marginTop: 0 }}>
+            Watch it and that transfer arrives as a statement line and reconciles against your prepaid credits, which is the whole trick this does for
+            every transaction after it. Until then the top-up is real at ai3.co and absent from these books, because nothing is watching the wallet it
+            left. Watching brings in <strong>everything that address does</strong>, so use it for the company's wallet, not a personal one.
+          </p>
+          <div className="ai3-actions">
+            <button className="ai3-btn primary" disabled={feedBusy || !o.network} onClick={() => runFeed(async () => {
+              await connectWallet({ companyId, network: o.network, address: o.address, viaTopUp: true, sinceDays: 30 });
+            }, `${o.address.slice(0, 6)}…${o.address.slice(-4)} watched`)}>Watch this wallet</button>
+            <a className="ai3-btn" {...nav.linkProps('/ledger?tab=credits')}>See the credit balance</a>
+          </div>
+          {!o.network && <p className="ai3-note">ai3.co did not say which chain that top-up arrived on, so it cannot be connected from here. Add the address under “Add bank account”.</p>}
+        </div>
+      ))}
       {adding && <AddBankAccount companyId={companyId} onDone={() => { setAdding(false); banks.refresh(); connected.refresh(); }} onCancel={() => setAdding(false)} />}
       {uploading && <UploadStatement companyId={companyId} accounts={accounts} preselect={uploading} onDone={(id) => { setUploading(null); banks.refresh(); nav.navigate(`/ledger?tab=reconcile&account=${id}`); }} />}
       {accounts.length === 0 && !adding ? (

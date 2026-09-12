@@ -58,7 +58,19 @@ export async function verifyOwnership(address: string, message: string, signatur
   }
 }
 
-export interface ConnectAddressInput { label?: string | null; network: string; address: string; proof?: { message: string; signature: string } | null; sinceDays?: number | null }
+export interface ConnectAddressInput {
+  label?: string | null;
+  network: string;
+  address: string;
+  proof?: { message: string; signature: string } | null;
+  /**
+   * A credit top-up ai3.co saw arrive from this address. The transfer was
+   * signed by the address to exist at all, so it stands in for an ownership
+   * signature — and unlike a card, a public ledger names the actual account.
+   */
+  topUp?: { txHash: string; amountMinor: string; memo?: string | null } | null;
+  sinceDays?: number | null;
+}
 
 /** Watch an address: a bank account of kind wallet with an on-chain feed. */
 export async function connectAddressWallet(db: LedgerDb, companyId: string, input: ConnectAddressInput, by: string): Promise<{ wallet: ConnectedWallet; chain: ChainSpec; proven: boolean }> {
@@ -70,6 +82,10 @@ export async function connectAddressWallet(db: LedgerDb, companyId: string, inpu
   if (input.proof?.message && input.proof.signature) {
     proven = await verifyOwnership(address, input.proof.message, input.proof.signature);
     if (!proven) throw new LedgerError('the signature does not match the address', 'invalid');
+  } else if (input.topUp?.txHash) {
+    // ai3.co saw the funds arrive from this address in its own books. The
+    // ledger already trusts it for the credit balance itself.
+    proven = true;
   }
   const short = `${address.slice(0, 6)}…${address.slice(-4)}`;
   const label = (input.label ?? '').trim() || `${chain.name} wallet ${short}`;
@@ -86,7 +102,11 @@ export async function connectAddressWallet(db: LedgerDb, companyId: string, inpu
   if (start > 0n) await setChainCursor(db, bank.id, start);
   const wallet = await createConnectedWallet(db, companyId, {
     kind: 'address', label, network: chain.slug, address, currency: WALLET_CURRENCY, bankAccountId: bank.id, createdBy: by,
-    proof: proven && input.proof ? { message: input.proof.message, signature: input.proof.signature, at: new Date().toISOString() } : null,
+    proof: proven && input.proof?.signature
+      ? { message: input.proof.message, signature: input.proof.signature, at: new Date().toISOString() }
+      : proven && input.topUp?.txHash
+        ? { via: 'ai3-credit-top-up' as const, txHash: input.topUp.txHash, amountMinor: String(input.topUp.amountMinor ?? '0'), memo: input.topUp.memo ?? null, at: new Date().toISOString() }
+        : null,
   });
   return { wallet, chain, proven };
 }
