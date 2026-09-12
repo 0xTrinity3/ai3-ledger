@@ -1652,7 +1652,7 @@ interface BankAccount {
   ledgerBalanceMinor: string; statementBalanceMinor: string | null; lastLineAt: string | null; unreconciled: number;
   lastRun: { at: string | null; autoPosted: number; leftForReview: number; linesSeen: number } | null;
 }
-interface Institution { id: string; name: string; kind: string; provider: string; connectionType: string; popular?: boolean; network?: string; exchange?: string }
+interface Institution { id: string; name: string; kind: string; provider: string; connectionType: string; countries?: string[]; popular?: boolean; network?: string; exchange?: string }
 interface ExchangeInfo { id: string; name: string; fields: Array<{ key: 'apiKey' | 'secret' | 'passphrase'; label: string; secret: boolean; help?: string }>; currencies: string[]; note: string }
 interface ConnectedWallet { id: string; kind: 'address' | 'exchange'; label: string; network: string | null; address: string | null; exchange: string | null; currency: string; bankAccountId: string | null; lastSyncAt: string | null; lastError: string | null; balanceMinor: string | null; explorer: string | null; chainName: string | null; symbol: string | null; proof: unknown }
 interface Proposal {
@@ -1807,6 +1807,51 @@ function ConnectExchangeForm({ companyId, institution, onDone, onBack }: { compa
   );
 }
 
+interface BankFeedsView {
+  ai3Connected: boolean;
+  providers: { plaid: boolean; gocardless: boolean } | null;
+  connectUrl: string | null;
+  connections: Array<{ id: string; provider: 'plaid' | 'gocardless'; institutionName: string | null; accounts: Array<{ id: string; name: string; currency: string; bankAccountId: string | null }>; lastSyncedAt: string | null; revokedAt: string | null; error: string | null }>;
+  accounts: Array<{ bankAccountId: string; name: string; currency: string; lastLineAt: string | null; unreconciled: number }>;
+  error: string | null;
+}
+
+/**
+ * A bank feed is authorised by the owner at their own bank, so it cannot start
+ * here: ai3.co holds the aggregator apps and runs that flow. This says so
+ * plainly and hands over, rather than creating an account whose feed would
+ * stay pending forever.
+ */
+function ConnectBankFeed({ companyId, institution, country, onBack, onManual }: { companyId: string; institution: Institution; country: string; onBack: () => void; onManual: () => void }) {
+  const feeds = usePluginData<BankFeedsView>('bank-feeds', { companyId });
+  const d = feeds.data;
+  const ready = institution.provider === 'plaid' ? d?.providers?.plaid : d?.providers?.gocardless;
+  // The country the person chose decides which aggregator ai3.co offers.
+  const url = d?.connectUrl ? `${d.connectUrl}${d.connectUrl.includes('?') ? '&' : '?'}country=${encodeURIComponent(country === 'EU' ? 'DE' : country)}` : null;
+  return (
+    <>
+      <p className="ai3-note" style={{ marginTop: 0 }}><strong>{institution.name}</strong> · automatic feed via {institution.provider}. <a href="#" onClick={(e) => { e.preventDefault(); onBack(); }}>Choose another</a></p>
+      {!d?.ai3Connected ? (
+        <p className="ai3-note">Bank feeds come through ai3.co, and this company is not connected to it yet. Add the company key under Finance › Settings, then come back.</p>
+      ) : !url ? (
+        <p className="ai3-note">ai3.co did not offer a bank page for this company{d.error ? `: ${d.error}` : ''}. Statements can be uploaded in the meantime.</p>
+      ) : (
+        <>
+          <p className="ai3-note" style={{ marginTop: 0 }}>
+            You authorise {institution.name} at your own bank, on ai3.co — nothing about your bank is typed here.
+            {ready ? ' Once you have, the account appears in this list within the half hour and its transactions arrive reconciled.' : ` ${institution.provider} is not switched on for this host yet, so the page will say so honestly.`}
+          </p>
+          <div className="ai3-actions">
+            <a className="ai3-btn primary" href={url} target="_blank" rel="noreferrer">Connect {institution.name} on ai3.co ↗</a>
+            <button className="ai3-btn" onClick={onManual}>Add it for uploads instead</button>
+          </div>
+          <p className="ai3-note">{institution.provider === 'gocardless' ? 'Your bank allows a small number of reads a day, so the feed runs a few times a day rather than constantly. “Sync now” on the account asks straight away.' : 'The feed runs every half hour.'}</p>
+        </>
+      )}
+    </>
+  );
+}
+
 function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; onDone: () => void; onCancel: () => void }) {
   const [query, setQuery] = useState('');
   const [country, setCountry] = useState('US');
@@ -1837,7 +1882,7 @@ function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; on
       </div>
       {!manual && !picked && (
         <>
-          <p className="ai3-note" style={{ marginTop: 0 }}>Search for banks, cards, payment providers, wallets and exchanges. Bank feeds come through Plaid in the US and TrueLayer or GoCardless in the UK and Europe; Stripe connects with a restricted key; a wallet is watched by its address; an exchange is read with a read-only API key.</p>
+          <p className="ai3-note" style={{ marginTop: 0 }}>Search for banks, cards, payment providers, wallets and exchanges. Bank feeds come through ai3.co — Plaid in the US and Canada, GoCardless everywhere else — and you authorise them at your own bank; Stripe connects with a restricted key; a wallet is watched by its address; an exchange is read with a read-only API key.</p>
           <div className="ai3-form-row">
             <Field label="Search" style={{ gridColumn: 'span 2' }}><input className="ai3-input" autoFocus placeholder="Mercury, Monzo, Stripe…" value={query} onChange={(e) => setQuery(e.target.value)} /></Field>
             <Field label="Country">
@@ -1859,7 +1904,10 @@ function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; on
       )}
       {picked && picked.provider === 'chain' && <ConnectWalletForm companyId={companyId} institution={picked} onDone={onDone} onBack={() => setPicked(null)} />}
       {picked && picked.provider === 'exchange' && <ConnectExchangeForm companyId={companyId} institution={picked} onDone={onDone} onBack={() => setPicked(null)} />}
-      {(manual || (picked && picked.provider !== 'chain' && picked.provider !== 'exchange')) && (
+      {picked && !manual && (picked.provider === 'plaid' || picked.provider === 'gocardless') && (
+        <ConnectBankFeed companyId={companyId} institution={picked} country={country} onBack={() => setPicked(null)} onManual={() => setManual(true)} />
+      )}
+      {(manual || (picked && !['chain', 'exchange', 'plaid', 'gocardless'].includes(picked.provider))) && (
         <>
           {picked && <p className="ai3-note" style={{ marginTop: 0 }}><strong>{picked.name}</strong> · {picked.connectionType}{picked.provider !== 'upload' && picked.provider !== 'stripe' ? ` via ${picked.provider}` : ''}. <a href="#" onClick={(e) => { e.preventDefault(); setPicked(null); }}>Choose another</a></p>}
           <div className="ai3-form-row">
@@ -1939,11 +1987,18 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
   const location = useHostLocation();
   const banks = usePluginData<{ accounts: BankAccount[] }>('bank-accounts', { companyId });
   const connected = usePluginData<{ wallets: ConnectedWallet[] }>('connected-wallets', { companyId });
+  const feeds = usePluginData<BankFeedsView>('bank-feeds', { companyId });
   const feedSync = usePluginAction('feed.sync');
+  const bankSync = usePluginAction('bank.sync');
   const disconnect = usePluginAction('wallet.disconnect');
   const toast = usePluginToast();
-  const { run: runFeed, busy: feedBusy } = useRun([banks.refresh, connected.refresh]);
+  const { run: runFeed, busy: feedBusy } = useRun([banks.refresh, connected.refresh, feeds.refresh]);
   const walletFor = (bankId: string) => (connected.data?.wallets ?? []).find((w) => w.bankAccountId === bankId) ?? null;
+  // The bank behind an aggregator account, so a live feed does not read as pending.
+  const connFor = (bankId: string) => {
+    for (const c of feeds.data?.connections ?? []) if (c.accounts.some((a) => a.bankAccountId === bankId)) return c;
+    return null;
+  };
   const [adding, setAdding] = useState(new URLSearchParams(location.search).get('add') === '1');
   const [uploading, setUploading] = useState<string | null>(null);
   const cur = company?.currency ?? 'USD';
@@ -1976,7 +2031,7 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
             return (
               <div className="ai3-card" key={a.id}>
                 <div className="ai3-toolbar" style={{ marginBottom: 6 }}>
-                  <h3 style={{ margin: 0 }}>{a.name} <span className={`ai3-badge ${a.feed === 'upload' ? 'draft' : walletFor(a.id)?.lastError ? 'bad' : 'issued'}`}>{a.feed === 'upload' ? 'upload' : a.feed === 'stripe' ? 'Stripe feed' : a.feed === 'chain' || a.feed === 'tempo' ? 'on-chain feed' : a.feed === 'exchange' ? 'exchange feed' : 'feed pending'}</span></h3>
+                  <h3 style={{ margin: 0 }}>{a.name} <span className={`ai3-badge ${a.feed === 'upload' ? 'draft' : walletFor(a.id)?.lastError || connFor(a.id)?.revokedAt ? 'bad' : 'issued'}`}>{a.feed === 'upload' ? 'upload' : a.feed === 'stripe' ? 'Stripe feed' : a.feed === 'chain' || a.feed === 'tempo' ? 'on-chain feed' : a.feed === 'exchange' ? 'exchange feed' : connFor(a.id)?.revokedAt ? 'reconnect needed' : connFor(a.id) ? 'bank feed' : 'feed pending'}</span></h3>
                   <span className="ai3-cap">{KIND_LABEL[a.kind] ?? a.kind} · {a.accountCode}</span>
                 </div>
                 <div className="ai3-pair">
@@ -1985,6 +2040,14 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
                 </div>
                 {diff !== null && diff !== 0n && <div className="ai3-cap" style={{ marginTop: 6 }}>Difference {fmt(diff, { currency: a.currency })}{a.unreconciled ? `, ${a.unreconciled} line${a.unreconciled === 1 ? '' : 's'} not yet reconciled` : ''}</div>}
                 {a.lastRun && <div className="ai3-cap" style={{ marginTop: 4 }}>Last run {dateLong(a.lastRun.at)}: {a.lastRun.autoPosted} posted automatically, {a.lastRun.leftForReview} left for you.</div>}
+                {(() => { const c = connFor(a.id); if (!c) return null; return (
+                  <div className="ai3-cap" style={{ marginTop: 4 }}>
+                    {c.institutionName ?? c.provider} · via {c.provider}
+                    {c.revokedAt ? <span className="red"> · the authorisation was withdrawn; reconnect on ai3.co to resume the feed</span>
+                      : c.error ? <span className="red"> · last read failed: {c.error}</span>
+                      : c.lastSyncedAt ? ` · read ${dateLong(c.lastSyncedAt)}` : ' · not read yet'}
+                  </div>
+                ); })()}
                 {(() => { const w = walletFor(a.id); if (!w) return null; return (
                   <div className="ai3-cap" style={{ marginTop: 4, wordBreak: 'break-all' }}>
                     {w.kind === 'address' ? <>{w.chainName} · {w.explorer ? <a href={w.explorer} target="_blank" rel="noreferrer">{w.address}</a> : w.address}{w.balanceMinor !== null ? ` · on chain ${fmt(w.balanceMinor, { symbol: false })} ${w.symbol}` : ''}{w.proof ? ' · ownership signed' : ''}</> : <>{w.chainName} · {w.currency} · read-only key</>}
@@ -2000,6 +2063,16 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
                     <a className="ai3-btn" {...nav.linkProps(`/ledger?tab=reconcile&account=${a.id}`)}>All reconciled · view</a>
                   )}
                   {stmt !== null && <button className="ai3-btn" onClick={() => setUploading(a.id)}>Upload</button>}
+                  {(() => { const c = connFor(a.id); if (!c || c.revokedAt) return null; return (
+                    <button className="ai3-btn" disabled={feedBusy} onClick={() => runFeed(async () => {
+                      const r = (await bankSync({ companyId })) as { imported: number; autoPosted: number; leftForReview: number; otherCurrency: number; needsReconnect: string[] };
+                      toast({
+                        title: r.imported > 0 ? `${r.imported} new line${r.imported === 1 ? '' : 's'}` : 'Nothing new at the bank',
+                        body: `${r.autoPosted} posted automatically, ${r.leftForReview} left for you.${r.otherCurrency ? ` ${r.otherCurrency} line(s) in another currency were left out — add an account in that currency to book them.` : ''}${r.needsReconnect.length ? ` Reconnect needed: ${r.needsReconnect.join(', ')}.` : ''}`,
+                        tone: r.needsReconnect.length ? 'info' : 'success', ttlMs: 9000,
+                      });
+                    }, 'Bank read')}>Sync now</button>
+                  ); })()}
                   {(() => { const w = walletFor(a.id); if (!w) return null; return (
                     <>
                       <button className="ai3-btn" disabled={feedBusy} onClick={() => runFeed(async () => { const r = (await feedSync({ companyId, walletId: w.id })) as { imported: number; autoPosted: number; leftForReview: number; error: string | null }; if (r.error) throw new Error(r.error); toast({ title: `${w.label} read`, body: `${r.imported} new line(s), ${r.autoPosted} posted, ${r.leftForReview} to review.`, tone: 'success' }); }, `${w.label} read`)}>Read now</button>

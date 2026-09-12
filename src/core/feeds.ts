@@ -4,10 +4,13 @@
  * would carry its feed, the way Xero lists every institution behind one search
  * box regardless of which feed network serves it.
  *
- * Feeds are behind one interface per provider (Plaid for the US, TrueLayer and
- * GoCardless for the UK and EU, Stripe by its own API). Until a provider's
- * credentials are configured on the host, choosing an institution still
- * creates the account, marks the feed as pending, and uploads work.
+ * Feeds are behind one interface per provider: Plaid for the US and Canada,
+ * GoCardless Bank Account Data everywhere else including the UK, Stripe by its
+ * own API. TrueLayer is named here as a provider because it may carry the UK
+ * one day, but nothing routes to it: GoCardless covers the same banks, so
+ * sending a UK company there would leave its feed pending forever. Until a
+ * provider's credentials are configured on the host, choosing an institution
+ * still creates the account, marks the feed as pending, and uploads work.
  */
 
 export type FeedProvider = 'plaid' | 'truelayer' | 'gocardless' | 'stripe' | 'upload' | 'chain' | 'exchange';
@@ -42,16 +45,16 @@ export const FEED_INSTITUTIONS: FeedInstitution[] = [
   { id: 'relay', name: 'Relay', kind: 'bank', countries: ['US'], provider: 'plaid', connectionType: 'automatic feed' },
   { id: 'amex-us', name: 'American Express (US)', kind: 'card', countries: ['US'], provider: 'plaid', connectionType: 'automatic feed' },
   // United Kingdom
-  { id: 'monzo-biz', name: 'Monzo Business', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed', popular: true },
-  { id: 'starling', name: 'Starling Business', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed', popular: true },
-  { id: 'tide', name: 'Tide', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
-  { id: 'barclays-biz', name: 'Barclays Business (UK)', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed', popular: true },
-  { id: 'hsbc-biz', name: 'HSBC Business (UK)', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
-  { id: 'lloyds-biz', name: 'Lloyds Business (UK)', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
-  { id: 'natwest-biz', name: 'NatWest Business', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
-  { id: 'santander-uk', name: 'Santander Business (UK)', kind: 'bank', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
-  { id: 'amex-uk', name: 'American Express (UK)', kind: 'card', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
-  { id: 'barclaycard', name: 'Barclaycard Business', kind: 'card', countries: ['GB'], provider: 'truelayer', connectionType: 'automatic feed' },
+  { id: 'monzo-biz', name: 'Monzo Business', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed', popular: true },
+  { id: 'starling', name: 'Starling Business', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed', popular: true },
+  { id: 'tide', name: 'Tide', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
+  { id: 'barclays-biz', name: 'Barclays Business (UK)', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed', popular: true },
+  { id: 'hsbc-biz', name: 'HSBC Business (UK)', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
+  { id: 'lloyds-biz', name: 'Lloyds Business (UK)', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
+  { id: 'natwest-biz', name: 'NatWest Business', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
+  { id: 'santander-uk', name: 'Santander Business (UK)', kind: 'bank', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
+  { id: 'amex-uk', name: 'American Express (UK)', kind: 'card', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
+  { id: 'barclaycard', name: 'Barclaycard Business', kind: 'card', countries: ['GB'], provider: 'gocardless', connectionType: 'automatic feed' },
   // Europe and multi-currency
   { id: 'wise', name: 'Wise Business', kind: 'bank', countries: ['*'], provider: 'gocardless', connectionType: 'automatic feed', popular: true },
   { id: 'revolut-biz', name: 'Revolut Business', kind: 'bank', countries: ['GB', 'EU'], provider: 'gocardless', connectionType: 'automatic feed', popular: true },
@@ -89,6 +92,5 @@ export function searchInstitutions(query: string, country = 'US'): FeedInstituti
 /** Which aggregator carries a country's banks. Both are wired behind one interface. */
 export function providerFor(country: string): FeedProvider {
   if (country === 'US' || country === 'CA') return 'plaid';
-  if (country === 'GB') return 'truelayer';
   return 'gocardless';
 }

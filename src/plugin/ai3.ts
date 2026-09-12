@@ -14,7 +14,11 @@ export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 export interface HostedResult { token: string; url: string }
 export interface HostedStatus { token: string; url: string; revoked: boolean; sentAt: string | null; sentTo: string | null; openedAt: string | null; openCount: number; paidAt: string | null; sender?: { email: string; via: string } | null; payments?: Array<{ at: string; amountMinor: string; currency: string; via: string; ref: string; network?: string | null; from?: string | null; explorer?: string | null }> }
 
-export class Ai3Error extends Error { constructor(message: string) { super(message); this.name = 'Ai3Error'; } }
+export class Ai3Error extends Error {
+  /** The HTTP status ai3.co answered with, where there was one. 409 on a bank connection means the owner must reconnect. */
+  readonly status: number;
+  constructor(message: string, status = 0) { super(message); this.name = 'Ai3Error'; this.status = status; }
+}
 
 export function isConnected(settings: CompanySettings): boolean {
   return Boolean(settings.ai3Key && settings.ai3Origin);
@@ -32,7 +36,7 @@ export async function ai3Call(fetch: FetchLike, settings: CompanySettings, path:
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!r.ok) {
     const msg = data && typeof data === 'object' && typeof (data as { error?: unknown }).error === 'string' ? (data as { error: string }).error : `ai3.co answered ${r.status}`;
-    throw new Ai3Error(msg);
+    throw new Ai3Error(msg, r.status);
   }
   return data;
 }

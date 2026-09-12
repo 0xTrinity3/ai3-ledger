@@ -93,6 +93,7 @@ import { exchangeSummaries } from './exchanges.js';
 import { bookBrowserPayment, connectAddressWallet, connectExchangeAccount, connectedWalletsView, disconnectWallet, ownershipMessage, payFromCompanyWallet, remoteInvoiceView, syncAllConnected, syncWalletForBank } from './pay.js';
 import { registerBooks } from './books.js';
 import { connectStripe, refreshStripe, syncStripeFeed, stripeStatus } from './stripe.js';
+import { bankFeedView, syncBankFeeds } from './banks.js';
 import { getStripeLink } from '../core/index.js';
 
 const CURRENCY = 'USD';
@@ -796,7 +797,7 @@ const plugin = definePlugin({
     // Banks and reconciliation
     context.data.register('feed-institutions', async (params) => {
       await companyOf(params);
-      return { institutions: searchInstitutions(s(params['query']) ?? '', s(params['country']) ?? 'US').slice(0, 30), providers: ['plaid', 'truelayer', 'gocardless', 'stripe'] };
+      return { institutions: searchInstitutions(s(params['query']) ?? '', s(params['country']) ?? 'US').slice(0, 30), providers: ['plaid', 'gocardless', 'stripe'] };
     });
     // Create from the catalogue (Xero's "Select your account") or by hand. Feeds
     // that need provider credentials the host does not have yet are created as
@@ -990,6 +991,19 @@ const plugin = definePlugin({
       const settings = await getSettings(ledger(), companyId, CURRENCY);
       return (await syncStripeFeed(ledger(), httpFetch, settings, companyId, { by: 'board', autoPost: params['autoPost'] !== false })) ?? { imported: 0, notConnected: true };
     });
+    // Bank feeds through ai3.co: which banks are connected, and the bank
+    // account each one feeds. No network unless the company key is set.
+    context.data.register('bank-feeds', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, ...(await bankFeedView(ledger(), httpFetch, await getSettings(ledger(), companyId, CURRENCY), companyId)) };
+    });
+    context.actions.register('bank.sync', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      // A person asking overrides the provider spacing; the daily cap is still the bank's.
+      return (await syncBankFeeds(ledger(), httpFetch, settings, companyId, { by: 'board', autoPost: params['autoPost'] !== false, force: true, baseCurrency: CURRENCY })) ?? { imported: 0, notConnected: true };
+    });
     context.actions.register('wallet.create', async (params, ctx) => {
       boardOnly(ctx);
       const companyId = await companyOf(params);
@@ -1142,6 +1156,38 @@ const plugin = definePlugin({
       }
       context.logger.info('ledger: chain feed done', { runId: job.runId, imported, posted, failed: failures.length });
       if (failures.length > 0) throw new Error(`chain feed: ${failures.join('; ')}`.slice(0, 1000));
+    });
+    // Banks, on the aggregators' terms: the job runs often enough that a
+    // freshly linked account is pulled within the half hour, and syncBankFeeds
+    // itself declines to ask a provider before its own floor (six hours for
+    // GoCardless, whose daily cap is small).
+    context.jobs.register('bank-feed', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let imported = 0;
+      let posted = 0;
+      let waited = 0;
+      const reconnect: string[] = [];
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          const r = await syncBankFeeds(ledger(), httpFetch, await getSettings(ledger(), company.id, CURRENCY), company.id, { by: 'bank-feed', baseCurrency: CURRENCY });
+          if (!r) continue;
+          imported += r.imported;
+          posted += r.autoPosted;
+          waited += r.waited;
+          for (const name of r.needsReconnect) reconnect.push(`${company.name}: ${name}`);
+          for (const a of r.perAccount) {
+            if (a.error && !a.reconnect) context.logger.warn('ledger: bank feed failed', { companyId: company.id, account: a.name, error: a.error });
+            if (a.otherCurrency > 0) context.logger.info('ledger: bank lines in another currency skipped', { companyId: company.id, account: a.name, currency: a.currency, skipped: a.otherCurrency });
+          }
+        } catch (err) {
+          failures.push(`${company.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      context.logger.info('ledger: bank feed done', { runId: job.runId, imported, posted, waited, reconnect: reconnect.length, failed: failures.length });
+      // A revoked authorisation is the owner's to renew, so it is said out loud but does not fail the job.
+      if (reconnect.length > 0) context.logger.warn('ledger: bank connections need reconnecting', { accounts: reconnect.slice(0, 20) });
+      if (failures.length > 0) throw new Error(`bank feed: ${failures.join('; ')}`.slice(0, 1000));
     });
     // A fresh tenant should not wait for the next quarter hour: first sweep
     // (which also installs the company skill) shortly after boot.

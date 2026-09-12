@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.12.4',
+  version: '0.12.5',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -91,6 +91,12 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: 'Model credits',
       description: 'Every hour, reads each hosted company’s model-credit balance from ai3.co and books grants, top-ups and usage so the books agree with the platform.',
       schedule: '20 * * * *',
+    },
+    {
+      jobKey: 'bank-feed',
+      displayName: 'Bank feed',
+      description: 'Reads new transactions from every bank and card connected through ai3.co (Plaid, GoCardless) into their bank accounts and posts what the matcher is sure of. Each provider is asked no more often than it allows, so a freshly linked account appears within the half hour and a rate limit is never spent.',
+      schedule: '*/30 * * * *',
     },
     {
       jobKey: 'chain-feed',
