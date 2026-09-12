@@ -1017,7 +1017,7 @@ const plugin = definePlugin({
       try { view = await fetchCredits(httpFetch, settings, companyId); } catch (err) { error = err instanceof Error ? err.message : String(err); }
       const bal = await accountBalances(ledger(), companyId);
       const prepaid = bal.find((a) => a.code === ACCOUNT.PREPAID_CREDITS);
-      return { connected: true, view, error, bookedMinor: prepaid ? prepaid.balanceMinor : '0' };
+      return { connected: true, view, error, bookedMinor: prepaid ? fromMinor(prepaid.balanceMinor) : '0' };
     });
     context.actions.register('credits.sync', async (params, ctx) => {
       boardOnly(ctx);
