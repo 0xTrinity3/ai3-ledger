@@ -8,7 +8,7 @@
  * no customers, no invoice lines, nothing from Paperclip's own tables beyond
  * a count of tasks finished.
  */
-import { companySummary, getSettings, markSummaryPublished, type CompanySettings, type CompanySummary, type LedgerDb } from '../core/index.js';
+import { companySummary, getSettings, markSummaryPublished, profitAndLoss, type CompanySettings, type CompanySummary, type LedgerDb } from '../core/index.js';
 import { ai3Call, isConnected, type FetchLike } from './ai3.js';
 
 export interface SummaryPayload {
@@ -18,6 +18,33 @@ export interface SummaryPayload {
   summary: CompanySummary;
   /** Paperclip tasks moved to done in the trailing 30 days, and open now. */
   tasks: { completed30d: number; open: number } | null;
+  /**
+   * Each agent as its own profit unit: what it earned and what it cost over the
+   * trailing 30 days, from entries already tagged with the agent that caused
+   * them. Unattributed entries are left out rather than spread around, so the
+   * per-agent figures never add up to more than the company's own.
+   *
+   * ai3.co needs this to charge a markup on the cost of one listing's work
+   * rather than on a company's whole model spend.
+   */
+  agents: AgentUnit[] | null;
+}
+
+export interface AgentUnit { agent: string; revenueMinor: string; costMinor: string; netMinor: string }
+
+/** At most this many agents travel; a company with more has bigger problems than this payload. */
+const MAX_AGENTS = 100;
+
+/** Per-agent income and expense for the window, strongest cost first. */
+export async function agentUnits(db: LedgerDb, companyId: string, window: { from: Date; to: Date }): Promise<AgentUnit[]> {
+  const pnl = await profitAndLoss(db, companyId, window, 'agent');
+  return pnl.groups
+    // A null group is everything nobody attributed. Reporting it as an agent
+    // called "null" would invite someone to bill for it.
+    .filter((g) => g.key !== null && g.key !== '')
+    .map((g) => ({ agent: String(g.key), revenueMinor: g.incomeMinor, costMinor: g.expenseMinor, netMinor: g.netMinor }))
+    .sort((a, b) => (BigInt(b.costMinor) > BigInt(a.costMinor) ? 1 : BigInt(b.costMinor) < BigInt(a.costMinor) ? -1 : 0))
+    .slice(0, MAX_AGENTS);
 }
 
 export interface IssueLike { status: string; updatedAt: string }
@@ -35,12 +62,22 @@ export async function buildSummaryPayload(
   input: { companyId: string; companyName: string; settings: CompanySettings; issues: IssueLike[] | null; now?: Date },
 ): Promise<SummaryPayload> {
   const now = input.now ?? new Date();
+  const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  let agents: AgentUnit[] | null = null;
+  try {
+    agents = await agentUnits(db, input.companyId, { from, to: now });
+  } catch {
+    // Per-agent figures are an addition, not the point of the payload. A company
+    // whose books cannot produce them still publishes everything else.
+    agents = null;
+  }
   return {
     companyId: input.companyId,
     companyName: input.settings.legalName || input.companyName,
     leaderboardOptIn: input.settings.leaderboardOptIn,
     summary: await companySummary(db, input.companyId, now),
     tasks: input.issues ? countTasks(input.issues, now) : null,
+    agents,
   };
 }
 

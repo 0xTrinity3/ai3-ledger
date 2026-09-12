@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { openPluginTestDb, type PluginTestDb } from './harness.js';
 import { ACCOUNT, companySummary, createCustomer, createInvoice, getSettings, issueInvoice, postTransaction, recordPayment, seedAccounts, updateSettings } from '../src/core/index.js';
-import { buildSummaryPayload, countTasks, publishSummary } from '../src/plugin/publish.js';
+import { agentUnits, buildSummaryPayload, countTasks, publishSummary } from '../src/plugin/publish.js';
 import { paperclipCostSource } from '../src/plugin/cost-source.js';
 import { sweepCosts } from '../src/core/index.js';
 
@@ -130,5 +130,56 @@ describe('publishing to ai3.co', () => {
     expect(s.leaderboardOptedAt).toBeNull();
     const p = await buildSummaryPayload(db, { companyId: CO, companyName: 'Co', settings: s, issues: null, now: NOW });
     expect(p.leaderboardOptIn).toBe(false);
+  });
+});
+
+describe('agents as profit units', () => {
+  it('reports each agent’s own cost and revenue, and leaves unattributed spend out', async () => {
+    const CO2 = '66666666-6666-4666-6666-666666666666';
+    const db2 = await openPluginTestDb();
+    await seedAccounts(db2, CO2, 'USD');
+    const when = new Date('2026-09-15T00:00:00Z');
+    // Two agents spend on models; a third cost is tagged to nobody.
+    for (const [agent, cents] of [['agent-social', 4000n], ['agent-finance', 96000n]] as Array<[string, bigint]>) {
+      await postTransaction(db2, {
+        companyId: CO2, occurredAt: when, description: `${agent} model spend`,
+        sourcePlatform: 'test', sourceKind: 'cost_sweep', sourceRef: `cost:${agent}`, currency: 'USD', createdBy: 'test',
+        entries: [
+          { accountCode: ACCOUNT.MODEL_INFERENCE, direction: 'debit', amountMinor: cents, subject: { agent } },
+          { accountCode: ACCOUNT.TREASURY, direction: 'credit', amountMinor: cents },
+        ],
+      });
+    }
+    await postTransaction(db2, {
+      companyId: CO2, occurredAt: when, description: 'unattributed spend',
+      sourcePlatform: 'test', sourceKind: 'cost_sweep', sourceRef: 'cost:nobody', currency: 'USD', createdBy: 'test',
+      entries: [
+        { accountCode: ACCOUNT.MODEL_INFERENCE, direction: 'debit', amountMinor: 50000n },
+        { accountCode: ACCOUNT.TREASURY, direction: 'credit', amountMinor: 50000n },
+      ],
+    });
+
+    const units = await agentUnits(db2, CO2, { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2026-10-01T00:00:00Z') });
+    expect(units.map((u) => u.agent)).toEqual(['agent-finance', 'agent-social']);
+    expect(units.find((u) => u.agent === 'agent-social')!.costMinor).toBe('4000');
+    expect(units.find((u) => u.agent === 'agent-finance')!.costMinor).toBe('96000');
+    // The $500 nobody attributed is absent, so the parts never exceed the whole.
+    const attributed = units.reduce((n, u) => n + BigInt(u.costMinor), 0n);
+    expect(attributed).toBe(100000n);
+    expect(units.some((u) => u.agent === 'null' || u.agent === '')).toBe(false);
+    await db2.close();
+  });
+
+  it('travels on the payload, and a company with no tagged spend publishes an empty list', async () => {
+    const CO3 = '55555555-5555-4555-5555-555555555555';
+    const db3 = await openPluginTestDb();
+    await seedAccounts(db3, CO3, 'USD');
+    await updateSettings(db3, CO3, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
+    const payload = await buildSummaryPayload(db3, {
+      companyId: CO3, companyName: 'Units Co', settings: await getSettings(db3, CO3, 'USD'), issues: null, now: new Date('2026-09-20T00:00:00Z'),
+    });
+    expect(payload.agents).toEqual([]);
+    expect(payload.summary.version).toBe(1);
+    await db3.close();
   });
 });
