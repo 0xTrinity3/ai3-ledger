@@ -8,6 +8,7 @@
  * scoped API routes declared in the manifest.
  */
 import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
+import { registerModel } from './model.js';
 import type { PluginApiRequestInput, PluginApiResponse, PluginContext } from '@paperclipai/plugin-sdk';
 import {
   ACCOUNT,
@@ -678,6 +679,8 @@ const plugin = definePlugin({
         ...(params['leaderboardOptIn'] !== undefined ? { leaderboardOptIn: params['leaderboardOptIn'] === true } : {}),
       });
     });
+    // Settings › Model: the organisation's default model, relayed to ai3.co.
+    registerModel(context, { fetch: httpFetch, companyOf, settingsOf: (companyId) => getSettings(ledger(), companyId, CURRENCY), boardOnly });
     // Push this company's figures to ai3.co now (the daily job does the same for every company).
     const issuesFor = async (companyId: string): Promise<IssueLike[] | null> => {
       try {

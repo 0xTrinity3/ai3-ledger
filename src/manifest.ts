@@ -46,6 +46,8 @@ const manifest: PaperclipPluginManifestV1 = {
       { type: 'sidebar', id: 'finance-nav', displayName: 'Finance', exportName: 'LedgerSidebarItem', order: 10 },
       // Finance settings live with the company's other settings (Members, Secrets…) at /<prefix>/company/settings/finance.
       { type: 'companySettingsPage', id: 'finance-settings', displayName: 'Finance', exportName: 'LedgerCompanySettings', routePath: 'finance', order: 40 },
+      // The organisation's default model, one choice for every agent; applied through ai3.co. /<prefix>/company/settings/model.
+      { type: 'companySettingsPage', id: 'model-settings', displayName: 'Model', exportName: 'ModelSettings', routePath: 'model', order: 41 },
     ],
   },
   database: {

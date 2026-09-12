@@ -18,6 +18,9 @@ import type { PluginPageProps, PluginSidebarProps } from '@paperclipai/plugin-sd
 import { BillsTab, EntriesView, ImportTab, JournalsTab, TransactionDetail, TrialBalanceCard, entriesLink } from './books.js';
 import { connectWallet, discoverWallets, sendToken, signMessage, short, waitForReceipt, WalletError, type ChainInfo, type DiscoveredWallet } from './wallet.js';
 
+// Settings › Model lives in its own file; the host loads it by export name.
+export { ModelSettings } from './model.js';
+
 // ---------------------------------------------------------------------------
 // Theme: one stylesheet, host variables, own class names.
 // ---------------------------------------------------------------------------
@@ -136,7 +139,7 @@ const CSS = `
 @media (max-width: 700px) { .ai3-recon { grid-template-columns: 1fr; } }
 `;
 
-function useStyles() {
+export function useStyles() {
   useEffect(() => {
     if (document.getElementById('ai3-ledger-css')) return;
     const el = document.createElement('style');
