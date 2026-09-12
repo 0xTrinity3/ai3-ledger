@@ -11,7 +11,7 @@
  * already carry (5000 Model inference against 1300), replay-safe because the
  * reference is the cumulative total.
  */
-import { ACCOUNT, postTransaction, sumPostedBySource, type CompanySettings, type LedgerDb } from '../core/index.js';
+import { ACCOUNT, agentTokens, allocate, postTransaction, sumPostedBySource, table, type CompanySettings, type LedgerDb } from '../core/index.js';
 import { ai3Call, isConnected, type FetchLike } from './ai3.js';
 
 export interface CreditsEntry { at: string; amountMinor: string; kind: string; ref: string | null }
@@ -47,14 +47,40 @@ export async function fetchCredits(fetch: FetchLike, settings: CompanySettings, 
   };
 }
 
-export interface CreditsSyncResult { fetched: boolean; grantsBooked: number; usageBookedMinor: string; chargedMinor: string; remainingMinor: string; skipped: string | null }
+export interface CreditsSyncResult {
+  fetched: boolean;
+  grantsBooked: number;
+  usageBookedMinor: string;
+  chargedMinor: string;
+  remainingMinor: string;
+  skipped: string | null;
+  /** How many agents the usage was split across. */
+  attributedToAgents?: number;
+  /** The part nobody caused, left on the company rather than spread over agents. */
+  unattributedMinor?: string;
+}
+
+/**
+ * When model usage was last booked, so the token split covers the same stretch
+ * the money does. Nothing booked yet means the window opens a day back, which is
+ * the most an hourly job can have missed.
+ */
+async function lastUsagePostedAt(db: LedgerDb, companyId: string): Promise<Date | null> {
+  const rows = await db.sql.query<{ at: string | null }>(
+    `SELECT MAX(occurred_at)::text AS at FROM ${table(db, 'transactions')}
+      WHERE company_id = $1 AND status = 'posted' AND source_platform = $2 AND source_kind = 'cost_sweep'`,
+    [companyId, CREDITS_PLATFORM],
+  );
+  const at = rows[0]?.at;
+  return at ? new Date(at) : null;
+}
 
 /** Grants that are money put in by the owner or AI3. A pathUSD top-up left the wallet and is booked by the chain feed. */
 const GRANT_KINDS = new Set(['free', 'admin', 'stripe', 'card', 'grant', 'promo']);
 
 /** Bring the books level with ai3.co. Safe to run every hour; nothing is posted twice. */
 export async function syncCredits(db: LedgerDb, fetch: FetchLike, settings: CompanySettings, companyId: string, by = 'credits'): Promise<CreditsSyncResult> {
-  const out: CreditsSyncResult = { fetched: false, grantsBooked: 0, usageBookedMinor: '0', chargedMinor: '0', remainingMinor: '0', skipped: null };
+  const out: CreditsSyncResult = { fetched: false, grantsBooked: 0, usageBookedMinor: '0', chargedMinor: '0', remainingMinor: '0', skipped: null, attributedToAgents: 0, unattributedMinor: '0' };
   if (!isConnected(settings)) { out.skipped = 'not connected to ai3.co'; return out; }
   const v = await fetchCredits(fetch, settings, companyId);
   out.fetched = true;
@@ -78,12 +104,48 @@ export async function syncCredits(db: LedgerDb, fetch: FetchLike, settings: Comp
   const booked = await sumPostedBySource(db, companyId, CREDITS_PLATFORM, 'cost_sweep', ACCOUNT.MODEL_INFERENCE, 'debit');
   const delta = charged - booked;
   if (delta > 0n) {
+    // Attribute the charge to the agents that caused it.
+    //
+    // The amount is what the provisioned key actually metered: real money, and
+    // nothing here computes it. The split comes from Paperclip's own per-agent
+    // token counts — which it records even on runs it prices at zero, which is
+    // most of them when an agent talks to a model through a CLI. Without this
+    // the whole charge lands on the company and on no agent, and every per-agent
+    // figure downstream reads zero while real money is being spent.
+    const since = (await lastUsagePostedAt(db, companyId)) ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const now = new Date();
+    let tokens: Awaited<ReturnType<typeof agentTokens>> = [];
+    try {
+      tokens = await agentTokens(db.sql, companyId, { from: since, to: now });
+    } catch {
+      // No readable cost events: the charge is still real, so book it whole and
+      // unattributed rather than losing it.
+      tokens = [];
+    }
+    const split = allocate(delta, tokens);
+    const attributed = split.filter((s) => s.agent !== null);
+    const entries = [
+      ...split.map((s) => ({
+        accountCode: ACCOUNT.MODEL_INFERENCE,
+        direction: 'debit' as const,
+        amountMinor: s.amountMinor,
+        ...(s.agent ? { subject: { agent: s.agent } } : {}),
+      })),
+      { accountCode: ACCOUNT.PREPAID_CREDITS, direction: 'credit' as const, amountMinor: delta },
+    ];
     const r = await postTransaction(db, {
-      companyId, occurredAt: new Date(), description: `Model usage through AI3 (at cost plus ${Math.round(v.markup * 100)}%)`,
+      companyId, occurredAt: now,
+      description: attributed.length > 0
+        ? `Model usage through AI3 (at cost plus ${Math.round(v.markup * 100)}%), across ${attributed.length} agent${attributed.length === 1 ? '' : 's'}`
+        : `Model usage through AI3 (at cost plus ${Math.round(v.markup * 100)}%)`,
       sourcePlatform: CREDITS_PLATFORM, sourceKind: 'cost_sweep', sourceRef: `credits:usage:${charged.toString()}`, currency, createdBy: by,
-      entries: [{ accountCode: ACCOUNT.MODEL_INFERENCE, direction: 'debit', amountMinor: delta }, { accountCode: ACCOUNT.PREPAID_CREDITS, direction: 'credit', amountMinor: delta }],
+      entries,
     });
-    if (r.inserted) out.usageBookedMinor = delta.toString();
+    if (r.inserted) {
+      out.usageBookedMinor = delta.toString();
+      out.attributedToAgents = attributed.length;
+      out.unattributedMinor = (split.find((s) => s.agent === null)?.amountMinor ?? 0n).toString();
+    }
   }
   return out;
 }

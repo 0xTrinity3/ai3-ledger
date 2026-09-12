@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { openPluginTestDb, type PluginTestDb } from './harness.js';
-import { ACCOUNT, accountBalances, balanceOf, createBankAccount, importStatementLines, listStatementLines, seedAccounts, updateSettings, getSettings, sumPostedBySource } from '../src/core/index.js';
+import { ACCOUNT, accountBalances, balanceOf, createBankAccount, importStatementLines, listStatementLines, seedAccounts, updateSettings, getSettings, sumPostedBySource, profitAndLoss } from '../src/core/index.js';
 import { syncCredits, fetchCredits, CREDITS_PLATFORM } from '../src/plugin/credits.js';
 import { TOOL_DECLARATIONS } from '../src/plugin/tools.js';
 
@@ -92,5 +92,68 @@ describe('model credits', () => {
     const line = (await listStatementLines(db, CO, bank.id))[0]!;
     expect(line.reference).toBe('credit:test-1234');
     expect(/^credit:[a-z0-9-]+$/i.test(line.reference ?? '')).toBe(true); // the rule the chain feed applies before the matcher guesses
+  });
+});
+
+describe('a charge nobody priced still lands on the agents that caused it', () => {
+  const CO2 = '44444444-4444-4444-4444-444444444444';
+  const BUSY = '11111111-1111-4111-8111-111111111111';
+  const QUIET = '22222222-2222-4222-8222-222222222222';
+
+  it('splits the metered charge by measured tokens, and the parts sum to the whole', async () => {
+    const db2 = await openPluginTestDb();
+    await seedAccounts(db2, CO2, 'USD');
+    await updateSettings(db2, CO2, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
+
+    // Paperclip's own record of two agents at work. cost_cents is 0 on every
+    // row: these ran through a CLI adapter, so the host priced none of them.
+    const at = new Date().toISOString();
+    for (const [agent, model, input, output] of [
+      [BUSY, 'anthropic/claude-opus-4.1', 100_000, 20_000],
+      [QUIET, 'anthropic/claude-haiku-4.5', 50_000, 5_000],
+    ] as Array<[string, string, number, number]>) {
+      await db2.raw.query(
+        `INSERT INTO public.cost_events (company_id, agent_id, provider, biller, billing_type, cost_status, model, input_tokens, cached_input_tokens, output_tokens, cost_cents, occurred_at)
+         VALUES ($1::uuid, $2::uuid, 'openrouter', 'openrouter', 'subscription', 'reported', $3, $4, 0, $5, 0, $6::timestamptz)`,
+        [CO2, agent, model, input, output, at],
+      );
+    }
+
+    // ai3.co says the provisioned key metered $12.34. That is the real money.
+    const view = { ...HOSTED, chargedMinor: '1234', usageMinor: '1028', entries: [] };
+    const r = await syncCredits(db2, ai3(view), await getSettings(db2, CO2, 'USD'), CO2, 'test');
+    expect(r.usageBookedMinor).toBe('1234');
+    expect(r.attributedToAgents).toBe(2);
+    expect(r.unattributedMinor).toBe('0');
+
+    // The books carry exactly what was metered, and every penny sits on an agent.
+    const total = await sumPostedBySource(db2, CO2, CREDITS_PLATFORM, 'cost_sweep', ACCOUNT.MODEL_INFERENCE, 'debit');
+    expect(total).toBe(1234n);
+
+    const pnl = await profitAndLoss(db2, CO2, { from: '2000-01-01', to: '2100-01-01' }, 'agent');
+    const perAgent = pnl.groups.filter((g) => g.key !== null);
+    expect(perAgent.map((g) => g.key).sort()).toEqual([BUSY, QUIET].sort());
+    const summed = perAgent.reduce((n, g) => n + BigInt(g.expenseMinor), 0n);
+    expect(summed).toBe(1234n);
+
+    // Opus output against haiku input: the busy agent carries far more of it.
+    const busy = perAgent.find((g) => g.key === BUSY)!;
+    const quiet = perAgent.find((g) => g.key === QUIET)!;
+    expect(BigInt(busy.expenseMinor)).toBeGreaterThan(BigInt(quiet.expenseMinor) * 5n);
+    await db2.close();
+  });
+
+  it('books the charge whole when no agent caused any of it', async () => {
+    const CO3 = '33333333-3333-4333-8333-333333333333';
+    const db3 = await openPluginTestDb();
+    await seedAccounts(db3, CO3, 'USD');
+    await updateSettings(db3, CO3, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
+    const r = await syncCredits(db3, ai3({ ...HOSTED, chargedMinor: '500', entries: [] }), await getSettings(db3, CO3, 'USD'), CO3, 'test');
+    expect(r.usageBookedMinor).toBe('500');
+    expect(r.attributedToAgents).toBe(0);
+    expect(r.unattributedMinor).toBe('500');
+    // Real money, still booked: the company is out of pocket either way.
+    expect(await sumPostedBySource(db3, CO3, CREDITS_PLATFORM, 'cost_sweep', ACCOUNT.MODEL_INFERENCE, 'debit')).toBe(500n);
+    await db3.close();
   });
 });

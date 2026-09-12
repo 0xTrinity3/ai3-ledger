@@ -106,3 +106,6 @@ export { getStripeLink, saveStripeLink } from './stripe.js';
 export type { ChartLine, ParsedChart, TrialBalanceInputLine, ParsedTrialBalance, TrialBalanceImportResult, ParsedDoc, ParsedDocLine, ParsedDocs, DocPreview, DocPreviewRow, DocImportResult } from './imports.js';
 export { openingMoment, inferAccountType, parseChartCsv, parseTrialBalanceCsv, importChart, importTrialBalance, undoTrialBalance, standingConversion, conversionDateOf, parseDocumentsCsv, previewDocuments, importDocuments } from './imports.js';
 export { sumPostedBySource } from './ledger.js';
+
+export type { AgentTokens, Allocation } from './tokens.js';
+export { agentTokens, allocate, modelWeight, TOKEN_WEIGHT, MODEL_CLASS, DEFAULT_MODEL_WEIGHT } from './tokens.js';
