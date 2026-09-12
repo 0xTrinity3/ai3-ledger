@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.12.7',
+  version: '0.13.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -85,6 +85,12 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: 'Publish summary',
       description: 'Once a day, sends each connected company’s figures (revenue, profit, cash, burn, receivables, model costs over the trailing 30 days) to ai3.co for the owner’s portfolio page and, only where the company opted in, the public leaderboard.',
       schedule: '30 4 * * *',
+    },
+    {
+      jobKey: 'market',
+      displayName: 'Marketplace billing',
+      description: 'Invoices what ai3.co says is due for the agents this company sells, reports back what has been collected, and \u2014 for the platform company \u2014 bills developers their commission on what they collected. Runs after the summary is published so a profit-share line is measured on the month it belongs to.',
+      schedule: '0 5 * * *',
     },
     {
       jobKey: 'credits',

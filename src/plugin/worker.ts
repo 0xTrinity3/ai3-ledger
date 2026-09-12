@@ -90,6 +90,7 @@ import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explo
 import { getCase, type Ruling } from './recourse.js';
 import { CHAINS, chainSummary } from './chains.js';
 import { fetchCredits, syncCredits } from './credits.js';
+import { billingDue, billingOpen, runMarket } from './market.js';
 import { exchangeSummaries } from './exchanges.js';
 import { bookBrowserPayment, connectAddressWallet, connectExchangeAccount, connectedWalletsView, disconnectWallet, ownershipMessage, payFromCompanyWallet, remoteInvoiceView, syncAllConnected, syncWalletForBank } from './pay.js';
 import { registerBooks } from './books.js';
@@ -701,6 +702,49 @@ const plugin = definePlugin({
       const r = await publishSummary(ledger(), httpFetch, { companyId, companyName: await nameOf(companyId), issues: await issuesFor(companyId), baseCurrency: CURRENCY });
       if (!r.published) throw new Error('Not connected to ai3.co. Add the company key under Finance › Settings.');
       return { published: true, leaderboardOptIn: r.payload?.leaderboardOptIn ?? false, asOf: r.payload?.summary.asOf ?? null };
+    });
+    // Marketplace: invoice for the agents this company sells, report collections,
+    // and — when this is the platform company — bill developers their commission.
+    const marketDeps = (companyId: string) => ({ db: ledger(), fetch: httpFetch, companyName: companyNameOf, baseCurrency: CURRENCY, companyId });
+    context.data.register('market', async (params) => {
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      if (!isConnected(settings)) return { connected: false, due: [], open: [] };
+      let due: unknown[] = [];
+      let open: unknown[] = [];
+      let error: string | null = null;
+      try {
+        due = await billingDue(httpFetch, settings, companyId);
+        open = await billingOpen(httpFetch, settings, companyId);
+      } catch (err) { error = err instanceof Error ? err.message : String(err); }
+      return { connected: true, due, open, error };
+    });
+    context.actions.register('market.run', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const { companyId: _drop, ...deps } = marketDeps(companyId);
+      return runMarket(deps, companyId);
+    });
+    context.jobs.register('market', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let invoiced = 0;
+      let collected = 0;
+      let commission = 0;
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          const { companyId: _drop, ...deps } = marketDeps(company.id);
+          const r = await runMarket(deps, company.id);
+          invoiced += r.invoiced.length;
+          collected += r.collected.length;
+          commission += r.commission.length;
+          for (const f of r.failures) failures.push(`${company.name}: ${f}`);
+        } catch (err) {
+          failures.push(`${company.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      context.logger.info('ledger: market billing done', { runId: job.runId, invoiced, collected, commission, failed: failures.length });
+      if (failures.length > 0) throw new Error(`market: ${failures.join('; ')}`.slice(0, 1000));
     });
     context.jobs.register('publish', async (job) => {
       const companies = await context.companies.list({ limit: 500 });

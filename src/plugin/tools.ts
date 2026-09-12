@@ -453,7 +453,7 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
 // The dispatcher
 // ---------------------------------------------------------------------------
 
-async function connectedPublish(deps: ToolDeps, inv: Invoice): Promise<Invoice> {
+export async function connectedPublish(deps: ToolDeps, inv: Invoice): Promise<Invoice> {
   const settings = await getSettings(deps.db, inv.companyId, deps.baseCurrency);
   if (!isConnected(settings) || inv.hosted || inv.status === 'draft' || inv.status === 'void') return inv;
   const r = await publishInvoice(deps.fetch, settings, inv, await deps.companyName(inv.companyId));
