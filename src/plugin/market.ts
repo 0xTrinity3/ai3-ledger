@@ -19,7 +19,7 @@ import {
   createCustomer, createInvoice, getSettings, issueInvoice, listCustomers, listInvoices,
   type CompanySettings, type Invoice, type LedgerDb,
 } from '../core/index.js';
-import { ai3Call, isConnected, type FetchLike } from './ai3.js';
+import { Ai3Error, ai3Call, isConnected, type FetchLike } from './ai3.js';
 import { connectedPublish, minorToMajor, type ToolDeps } from './tools.js';
 import { DISPUTE_CLAUSE } from './recourse.js';
 
@@ -211,4 +211,101 @@ export async function runMarket(deps: ToolDeps, companyId: string): Promise<Mark
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// ---------------------------------------------------------------------------
+// The ledger's own entitlement
+// ---------------------------------------------------------------------------
+
+/** The slug the ledger is sold under on ai3.co. */
+export const LEDGER_SLUG = 'ai3-ledger';
+
+/** How long an answer stands before it is asked for again. */
+const ENTITLEMENT_TTL_MS = 30 * 60 * 1000;
+
+export interface Entitlement {
+  ok: boolean;
+  reason: string | null;
+  /** True when this is a decision, false when it is the benefit of the doubt. */
+  known: boolean;
+  installUrl: string | null;
+  at: number;
+}
+
+const cache = new Map<string, Entitlement>();
+
+/** Forget what we know; for tests and for the moment an owner installs it. */
+export function forgetEntitlements(): void {
+  cache.clear();
+}
+
+/**
+ * May this company use the parts of the ledger that are sold?
+ *
+ * **It fails open.** If ai3.co cannot be reached, or answers something
+ * unexpected, or the company is not connected at all, the answer is yes. A
+ * plugin that stops keeping a company's books because a licensing server is
+ * unreachable is not a plugin anybody should install, and accounting software
+ * that locks you out of your own accounts is worse than accounting software you
+ * have not paid for.
+ *
+ * The only thing that turns it off is ai3.co saying plainly that this company is
+ * not entitled.
+ */
+export async function ledgerEntitlement(fetch: FetchLike, settings: CompanySettings, companyId: string, now = Date.now()): Promise<Entitlement> {
+  const cached = cache.get(companyId);
+  if (cached && now - cached.at < ENTITLEMENT_TTL_MS) return cached;
+  const open = (reason: string): Entitlement => ({ ok: true, reason, known: false, installUrl: null, at: now });
+  if (!isConnected(settings)) return open('not connected to ai3.co');
+  let answer: Entitlement;
+  try {
+    const r = (await ai3Call(fetch, settings, '/api/market/entitlement', { companyId, slug: LEDGER_SLUG })) as {
+      ok?: boolean; reason?: string; installUrl?: string;
+    };
+    answer = { ok: r.ok === true, reason: r.reason ?? null, known: true, installUrl: r.installUrl ?? null, at: now };
+  } catch (err) {
+    const status = err instanceof Ai3Error ? err.status : 0;
+    if (status === 402) {
+      // The one answer that means no.
+      answer = { ok: false, reason: (err as Ai3Error).message, known: true, installUrl: null, at: now };
+    } else if (status === 404) {
+      // No such listing: the ledger is not being sold here at all.
+      answer = open('the ledger is not listed on this platform');
+    } else {
+      // Unreachable, rate limited, a bad gateway: keep the last decision if
+      // there was one, and otherwise give the benefit of the doubt.
+      answer = cached ? { ...cached, at: now } : open(`ai3.co did not answer (${status || 'network'})`);
+    }
+  }
+  cache.set(companyId, answer);
+  return answer;
+}
+
+/**
+ * What stops when a company is not entitled.
+ *
+ * Never the books themselves. A company must always be able to read its own
+ * accounts, pay what it owes, and take a dispute to the venue its invoices
+ * name — gating any of those would trap a customer's money and, worse, stop
+ * them paying the invoice that would put it right.
+ *
+ * What stops is the automation and the work that creates new obligations.
+ */
+export const ALWAYS_ALLOWED = new Set([
+  // Reading the books
+  'position', 'invoices', 'invoice', 'customers', 'profit-and-loss', 'balance-sheet',
+  'bank-accounts', 'reconcile-queue', 'wallet', 'credits', 'stripe',
+  // Paying what you owe, and recording what you were paid
+  'pay-invoice', 'record-payment',
+  // The venue every invoice names
+  'dispute-invoice', 'dispute', 'settle-dispute',
+]);
+
+export function gatedTool(name: string): boolean {
+  return !ALWAYS_ALLOWED.has(name);
+}
+
+/** What to tell an agent that asked for something the company is not paying for. */
+export function notEntitledMessage(name: string, e: Entitlement): string {
+  return `The AI3 Ledger is not active for this company, so ${name} is unavailable${e.reason ? ` (${e.reason})` : ''}. Reading the books, paying an invoice or a bill, and filing a dispute all still work. A person can install it at ${e.installUrl ?? 'https://ai3.co/market'}.`;
 }

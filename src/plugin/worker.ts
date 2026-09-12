@@ -90,7 +90,7 @@ import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explo
 import { getCase, type Ruling } from './recourse.js';
 import { CHAINS, chainSummary } from './chains.js';
 import { fetchCredits, syncCredits } from './credits.js';
-import { billingDue, billingOpen, runMarket } from './market.js';
+import { billingDue, billingOpen, runMarket, ledgerEntitlement, gatedTool, notEntitledMessage, forgetEntitlements } from './market.js';
 import { exchangeSummaries } from './exchanges.js';
 import { bookBrowserPayment, connectAddressWallet, connectExchangeAccount, connectedWalletsView, disconnectWallet, ownershipMessage, payFromCompanyWallet, remoteInvoiceView, syncAllConnected, syncWalletForBank } from './pay.js';
 import { registerBooks } from './books.js';
@@ -150,6 +150,9 @@ async function sweepAll(): Promise<void> {
   const companies = await c.companies.list({ limit: 500 });
   for (const company of companies) {
     await syncSkill(company.id);
+    // The skill is reconciled either way — an agent should still be told what
+    // the ledger is, and that it is not active — but nothing is swept.
+    if (!(await jobAllowed(company.id, (url: string, init?: RequestInit) => c.http.fetch(url, init), 'sweep'))) continue;
     try {
       await seedAccounts(ledger(), company.id, CURRENCY);
       const w = await ensureWallet(ledger(), company.id, CURRENCY);
@@ -445,6 +448,25 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
   }
 }
 
+/**
+ * Should a scheduled job run for this company?
+ *
+ * The automation is what a company pays for, so it is what stops when it does
+ * not. The books it has already built stay readable and payable either way —
+ * they simply stop keeping themselves up to date, which is a state a company can
+ * live in and recover from.
+ */
+async function jobAllowed(companyId: string, httpFetch: (url: string, init?: RequestInit) => Promise<Response>, job: string): Promise<boolean> {
+  try {
+    const e = await ledgerEntitlement(httpFetch, await getSettings(ledger(), companyId, CURRENCY), companyId);
+    if (!e.ok) ctx?.logger.info('ledger: job skipped, not entitled', { job, companyId, reason: e.reason });
+    return e.ok;
+  } catch {
+    // The guard must never be the reason a job fails to run.
+    return true;
+  }
+}
+
 const plugin = definePlugin({
   async setup(context) {
     ctx = context;
@@ -732,6 +754,7 @@ const plugin = definePlugin({
       let commission = 0;
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'market'))) continue;
         try {
           const { companyId: _drop, ...deps } = marketDeps(company.id);
           const r = await runMarket(deps, company.id);
@@ -751,6 +774,7 @@ const plugin = definePlugin({
       let published = 0;
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'publish'))) continue;
         try {
           await seedAccounts(ledger(), company.id, CURRENCY);
           const r = await publishSummary(ledger(), httpFetch, { companyId: company.id, companyName: company.name, issues: await issuesFor(company.id), baseCurrency: CURRENCY });
@@ -908,6 +932,7 @@ const plugin = definePlugin({
       const companies = await context.companies.list({ limit: 500 });
       let posted = 0;
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'reconcile'))) continue;
         try {
           for (const bank of await listBankAccounts(ledger(), company.id)) {
             const r = await runReconciliation(ledger(), company.id, bank.id, { threshold: 90, by: 'nightly' });
@@ -932,6 +957,15 @@ const plugin = definePlugin({
     for (const decl of TOOL_DECLARATIONS) {
       context.tools.register(decl.name, { displayName: decl.displayName, description: decl.description, parametersSchema: decl.parametersSchema }, async (params, runCtx) => {
         await seedAccounts(ledger(), runCtx.companyId, CURRENCY);
+        // Reading the books, paying what you owe and filing a dispute are never
+        // gated; everything that creates new work or new obligations is.
+        if (gatedTool(decl.name)) {
+          const e = await ledgerEntitlement(httpFetch, await getSettings(ledger(), runCtx.companyId, CURRENCY), runCtx.companyId);
+          if (!e.ok) {
+            context.logger.info('ledger: tool refused, not entitled', { tool: decl.name, companyId: runCtx.companyId, reason: e.reason });
+            return { error: notEntitledMessage(decl.name, e) };
+          }
+        }
         const started = Date.now();
         const result = await runTool({ db: ledger(), fetch: httpFetch, companyName: nameOf, baseCurrency: CURRENCY }, decl.name, params, runCtx);
         context.logger.info('ledger: tool', { tool: decl.name, agentId: runCtx.agentId, companyId: runCtx.companyId, ms: Date.now() - started, ...(result.error ? { error: result.error } : {}) });
@@ -947,6 +981,7 @@ const plugin = definePlugin({
       let written = 0;
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'briefing'))) continue;
         try {
           await seedAccounts(ledger(), company.id, CURRENCY);
           const b = await buildBriefing(ledger(), company.id);
@@ -975,6 +1010,7 @@ const plugin = definePlugin({
       let sent = 0;
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'reminders'))) continue;
         try {
           const settings = await getSettings(ledger(), company.id, CURRENCY);
           if (!settings.remindersEnabled || !isConnected(settings)) continue;
@@ -1089,6 +1125,7 @@ const plugin = definePlugin({
       let synced = 0;
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'credits'))) continue;
         try {
           const r = await syncCredits(ledger(), httpFetch, await getSettings(ledger(), company.id, CURRENCY), company.id, 'credits');
           if (r.fetched && !r.skipped) synced += 1;
@@ -1217,6 +1254,7 @@ const plugin = definePlugin({
       let posted = 0;
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'chain-feed'))) continue;
         try {
           const r = await syncWalletFeed(ledger(), company.id, { by: 'chain-feed' });
           if (r) { imported += r.imported; posted += r.autoPosted; }
@@ -1259,6 +1297,7 @@ const plugin = definePlugin({
       const reconnect: string[] = [];
       const failures: string[] = [];
       for (const company of companies) {
+        if (!(await jobAllowed(company.id, httpFetch, 'bank-feed'))) continue;
         try {
           const r = await syncBankFeeds(ledger(), httpFetch, await getSettings(ledger(), company.id, CURRENCY), company.id, { by: 'bank-feed', baseCurrency: CURRENCY });
           if (!r) continue;
