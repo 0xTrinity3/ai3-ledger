@@ -242,6 +242,13 @@ interface BalanceSheet { asOf: string; assets: BsSection; liabilities: BsSection
 // Shared bits
 // ---------------------------------------------------------------------------
 
+/** The message of whatever a worker action threw: an Error, or the bridge's plain { code, message } object. */
+export function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') return (err as { message: string }).message;
+  return String(err);
+}
+
 export function useRun(refreshers: Array<() => void>) {
   const toast = usePluginToast();
   const [busy, setBusy] = useState(false);
@@ -253,7 +260,7 @@ export function useRun(refreshers: Array<() => void>) {
       refreshers.forEach((r) => r());
       return true;
     } catch (err) {
-      toast({ title: 'That did not work', body: err instanceof Error ? err.message : String(err), tone: 'error', ttlMs: 8000 });
+      toast({ title: 'That did not work', body: errorText(err), tone: 'error', ttlMs: 8000 });
       return false;
     } finally {
       setBusy(false);
