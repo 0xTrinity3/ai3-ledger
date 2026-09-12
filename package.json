@@ -1,6 +1,6 @@
 {
   "name": "@ai3/ledger",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "type": "module",
   "description": "AI3 Ledger \u2014 accounting for agent organisations. Paperclip plugin; platform-agnostic core.",
   "engines": {
