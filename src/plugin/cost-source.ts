@@ -90,3 +90,54 @@ function describe(r: CostEventRow, category: CostCategory): string {
   const how = r.billing_type && r.billing_type !== 'unknown' ? ` · ${r.billing_type.replace(/_/g, ' ')}` : '';
   return `${who} · ${what}${how}`;
 }
+
+export interface CostEventDetail {
+  id: string;
+  agentId: string | null;
+  issueId: string | null;
+  projectId: string | null;
+  goalId: string | null;
+  runId: string | null;
+  provider: string | null;
+  biller: string | null;
+  billingType: string | null;
+  costStatus: string | null;
+  model: string | null;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  costCents: string | null;
+  occurredAt: string;
+}
+
+/** One cost event by id, for the drill-down from a swept expense back to the run that caused it. */
+export async function costEventDetail(sql: SqlClient, companyId: string, id: string): Promise<CostEventDetail | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const rows = await sql.query<CostEventRow & { heartbeat_run_id: string | null; input_tokens: number | null; cached_input_tokens: number | null; output_tokens: number | null; occurred_at_txt: string }>(
+    `SELECT id, company_id, agent_id, issue_id, project_id, goal_id, heartbeat_run_id, provider, biller, billing_type, cost_status, model,
+            input_tokens, cached_input_tokens, output_tokens, cost_cents, occurred_at, occurred_at::text AS occurred_at_txt, created_at::text AS created_at_txt
+       FROM public.cost_events
+      WHERE company_id = $1::uuid AND id = $2::uuid`,
+    [companyId, id],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: r.id,
+    agentId: r.agent_id,
+    issueId: r.issue_id,
+    projectId: r.project_id,
+    goalId: r.goal_id,
+    runId: r.heartbeat_run_id,
+    provider: r.provider,
+    biller: r.biller,
+    billingType: r.billing_type,
+    costStatus: r.cost_status,
+    model: r.model,
+    inputTokens: r.input_tokens === null ? null : Number(r.input_tokens),
+    cachedInputTokens: r.cached_input_tokens === null ? null : Number(r.cached_input_tokens),
+    outputTokens: r.output_tokens === null ? null : Number(r.output_tokens),
+    costCents: r.cost_cents === null ? null : String(r.cost_cents),
+    occurredAt: r.occurred_at_txt,
+  };
+}

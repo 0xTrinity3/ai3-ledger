@@ -40,6 +40,10 @@ export interface InvoiceLineInput {
   description: string;
   quantity?: number | string;
   unitAmountMinor: Minor | number | string;
+  /** Tax on the line, in the invoice currency. Added to the total and booked to 2100 Tax payable. */
+  taxMinor?: Minor | number | string | null;
+  /** Income account the line goes to. Defaults to 4000 Service income. */
+  accountCode?: string | null;
 }
 
 export interface InvoiceLine {
@@ -48,6 +52,8 @@ export interface InvoiceLine {
   quantity: string;
   unitAmountMinor: string;
   amountMinor: string;
+  taxMinor: string;
+  accountCode: string | null;
 }
 
 export interface InvoicePayment {
@@ -74,8 +80,15 @@ export interface Invoice {
   rateToBase: string;
   issuedAt: string | null;
   dueAt: string | null;
+  reference: string | null;
+  subtotalMinor: string;
+  taxMinor: string;
   totalMinor: string;
   baseTotalMinor: string;
+  /** Imports: what had already been paid in the previous system. */
+  openingPaidMinor: string;
+  /** Imported from the previous system and dated before the conversion date: issued without posting. */
+  conversion: boolean;
   paidMinor: string;
   outstandingMinor: string;
   paymentMethods: PaymentInstruction[];
@@ -196,9 +209,17 @@ export interface CreateInvoiceInput {
   notes?: string | null;
   subject?: Subject;
   createdBy?: string;
+  /** Force a number (imports). Must be unique per company. */
+  number?: string | null;
+  /** A purchase order or the previous system's reference. */
+  reference?: string | null;
+  /** Imports: what had already been paid in the previous system. */
+  openingPaidMinor?: Minor | number | string | null;
+  /** Imports: dated before the conversion date, so issuing posts nothing. */
+  conversion?: boolean;
 }
 
-function normaliseLines(lines: InvoiceLineInput[]): Array<{ position: number; description: string; quantity: string; unit: string; amount: string }> {
+function normaliseLines(lines: InvoiceLineInput[]): Array<{ position: number; description: string; quantity: string; unit: string; amount: string; tax: string; account: string | null }> {
   if (!Array.isArray(lines) || lines.length === 0) throw new LedgerError('an invoice needs at least one line', 'invalid');
   if (lines.length > 200) throw new LedgerError('an invoice may have at most 200 lines', 'invalid');
   return lines.map((l, i) => {
@@ -209,7 +230,10 @@ function normaliseLines(lines: InvoiceLineInput[]): Array<{ position: number; de
     const unit = assertPositiveMinor(l.unitAmountMinor, `line ${i + 1} unit amount`);
     const qty4 = Math.round(qty * 10_000);
     const amount = (unit * BigInt(qty4) + 5_000n) / 10_000n;
-    return { position: i + 1, description, quantity: (qty4 / 10_000).toFixed(4), unit: fromMinor(unit), amount: fromMinor(amount) };
+    const tax = l.taxMinor === undefined || l.taxMinor === null || l.taxMinor === '' ? 0n : toMinor(l.taxMinor);
+    if (tax < 0n) throw new LedgerError(`line ${i + 1} tax cannot be negative`, 'invalid');
+    const account = String(l.accountCode ?? '').trim() || null;
+    return { position: i + 1, description, quantity: (qty4 / 10_000).toFixed(4), unit: fromMinor(unit), amount: fromMinor(amount), tax: fromMinor(tax), account };
   });
 }
 
@@ -228,33 +252,47 @@ export async function createInvoice(db: LedgerDb, companyId: string, input: Crea
   const customer = await getCustomer(db, companyId, input.customerId);
   if (!customer) throw new LedgerError(`customer ${input.customerId} not found for company ${companyId}`, 'invalid');
   const lines = normaliseLines(input.lines);
-  const total = lines.reduce((acc, l) => acc + BigInt(l.amount), 0n);
+  const accounts = lines.map((l) => l.account).filter((a): a is string => Boolean(a));
+  if (accounts.length) {
+    const rows = await db.sql.query<{ code: string }>(`SELECT code FROM ${table(db, 'accounts')} WHERE company_id = $1 AND code = ANY(string_to_array($2::text, ','))`, [companyId, [...new Set(accounts)].join(',')]);
+    const found = new Set(rows.map((r) => r.code));
+    const missing = accounts.filter((a) => !found.has(a));
+    if (missing.length) throw new LedgerError(`unknown account code${missing.length === 1 ? '' : 's'} ${[...new Set(missing)].join(', ')}`, 'unknown_account');
+  }
+  const subtotal = lines.reduce((acc, l) => acc + BigInt(l.amount), 0n);
+  const tax = lines.reduce((acc, l) => acc + BigInt(l.tax), 0n);
+  const total = subtotal + tax;
+  const openingPaid = input.openingPaidMinor === undefined || input.openingPaidMinor === null || input.openingPaidMinor === '' ? 0n : toMinor(input.openingPaidMinor);
+  if (openingPaid < 0n || openingPaid > total) throw new LedgerError('opening paid amount must be between zero and the total', 'invalid');
   const methods = await paymentInstructionsFor(db, companyId, input.paymentMethodIds ?? null);
   const id = newId();
   const publicId = newId();
   const s = input.subject ?? {};
+  const forced = input.number?.trim() || null;
 
   let number = '';
   for (let attempt = 0; attempt < 5; attempt++) {
-    number = await nextInvoiceNumber(db, companyId);
+    number = forced ?? (await nextInvoiceNumber(db, companyId));
     const r = await db.sql.execute(
       `INSERT INTO ${table(db, 'invoices')}
-         (id, public_id, company_id, customer_id, number, due_at, currency, subtotal_minor, total_minor, status,
-          subject_work_ref, subject_goal_ref, subject_agent_ref, created_by, rate_to_base, base_currency, base_total_minor, payment_methods, notes)
-       VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, $6::timestamptz, $7, $8::bigint, $8::bigint, 'draft', $9, $10, $11, $12, $13::numeric, $14, $15::bigint, $16::jsonb, $17)
+         (id, public_id, company_id, customer_id, number, due_at, currency, subtotal_minor, tax_minor, total_minor, status,
+          subject_work_ref, subject_goal_ref, subject_agent_ref, created_by, rate_to_base, base_currency, base_total_minor, payment_methods, notes, reference, opening_paid_minor, conversion)
+       VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, $6::timestamptz, $7, $8::bigint, $18::bigint, $19::bigint, 'draft', $9, $10, $11, $12, $13::numeric, $14, $15::bigint, $16::jsonb, $17, $20, $21::bigint, $22::boolean)
        ON CONFLICT (company_id, number) DO NOTHING`,
-      [id, publicId, companyId, customer.id, number, input.dueAt ? toIso(input.dueAt) : null, currency, fromMinor(total), s.work ?? null, s.goal ?? null, s.agent ?? null,
-        input.createdBy ?? 'system', rateString(rate), base, fromMinor(toBase(total, rate)), JSON.stringify(methods), input.notes?.trim().slice(0, 2000) || null],
+      [id, publicId, companyId, customer.id, number, input.dueAt ? toIso(input.dueAt) : null, currency, fromMinor(subtotal), s.work ?? null, s.goal ?? null, s.agent ?? null,
+        input.createdBy ?? 'system', rateString(rate), base, fromMinor(toBase(total, rate)), JSON.stringify(methods), input.notes?.trim().slice(0, 2000) || null,
+        fromMinor(tax), fromMinor(total), input.reference?.trim().slice(0, 100) || null, fromMinor(openingPaid), input.conversion === true],
     );
     if (r.rowCount === 1) break;
+    if (forced) throw new LedgerError(`an invoice numbered ${forced} already exists`, 'invalid');
     number = '';
   }
   if (!number) throw new LedgerError('could not allocate an invoice number', 'invalid');
 
   const written = await db.sql.execute(
-    `INSERT INTO ${table(db, 'invoice_lines')} (id, invoice_id, position, description, quantity, unit_amount_minor, amount_minor)
-     SELECT gen_random_uuid(), $1::uuid, l.position, l.description, l.quantity, l.unit, l.amount
-       FROM jsonb_to_recordset($2::jsonb) AS l(position int, description text, quantity numeric, unit bigint, amount bigint)`,
+    `INSERT INTO ${table(db, 'invoice_lines')} (id, invoice_id, position, description, quantity, unit_amount_minor, amount_minor, tax_minor, account_code)
+     SELECT gen_random_uuid(), $1::uuid, l.position, l.description, l.quantity, l.unit, l.amount, l.tax, l.account
+       FROM jsonb_to_recordset($2::jsonb) AS l(position int, description text, quantity numeric, unit bigint, amount bigint, tax bigint, account text)`,
     [id, JSON.stringify(lines)],
   );
   if (written.rowCount !== lines.length) {
@@ -291,8 +329,13 @@ interface InvoiceRow {
   rate_to_base: string;
   issued_at: string | null;
   due_at: string | null;
+  reference: string | null;
+  subtotal_minor: unknown;
+  tax_minor: unknown;
   total_minor: unknown;
   base_total_minor: unknown;
+  opening_paid_minor: unknown;
+  conversion: boolean;
   paid_minor: unknown;
   payment_methods: unknown;
   notes: string | null;
@@ -315,7 +358,7 @@ interface InvoiceRow {
 const INVOICE_SELECT = (db: LedgerDb) => `
   SELECT i.id, i.public_id, i.company_id, i.customer_id, c.name AS customer_name, c.email AS customer_email, i.number, i.status, i.currency,
          i.base_currency, i.rate_to_base::text AS rate_to_base,
-         i.issued_at::text AS issued_at, i.due_at::text AS due_at, i.total_minor, i.base_total_minor, i.payment_methods, i.notes,
+         i.issued_at::text AS issued_at, i.due_at::text AS due_at, i.reference, i.subtotal_minor, i.tax_minor, i.total_minor, i.base_total_minor, i.opening_paid_minor, i.conversion, i.payment_methods, i.notes,
          i.hosted_token, i.hosted_url, i.hosted_at::text AS hosted_at, i.sent_at::text AS sent_at, i.sent_to, i.opened_at::text AS opened_at, i.open_count, i.reminder_stage, i.last_reminder_at::text AS last_reminder_at,
          i.subject_work_ref, i.subject_goal_ref, i.subject_agent_ref, i.created_by, i.created_at::text AS created_at,
          COALESCE((SELECT SUM(p.amount_minor) FROM ${table(db, 'invoice_payments')} p WHERE p.invoice_id = i.id AND p.transaction_id IS NOT NULL), 0) AS paid_minor
@@ -325,8 +368,8 @@ export async function getInvoice(db: LedgerDb, companyId: string, id: string): P
   const rows = await db.sql.query<InvoiceRow>(`${INVOICE_SELECT(db)} WHERE i.company_id = $1 AND i.id = $2::uuid`, [companyId, id]);
   const r = rows[0];
   if (!r) return null;
-  const lines = await db.sql.query<{ position: number; description: string; quantity: string; unit_amount_minor: unknown; amount_minor: unknown }>(
-    `SELECT position, description, quantity::text AS quantity, unit_amount_minor, amount_minor
+  const lines = await db.sql.query<{ position: number; description: string; quantity: string; unit_amount_minor: unknown; amount_minor: unknown; tax_minor: unknown; account_code: string | null }>(
+    `SELECT position, description, quantity::text AS quantity, unit_amount_minor, amount_minor, tax_minor, account_code
        FROM ${table(db, 'invoice_lines')} WHERE invoice_id = $1::uuid ORDER BY position`,
     [id],
   );
@@ -337,7 +380,7 @@ export async function getInvoice(db: LedgerDb, companyId: string, id: string): P
   );
   return invoiceFromRow(
     r,
-    lines.map((l) => ({ position: Number(l.position), description: l.description, quantity: String(l.quantity), unitAmountMinor: fromMinor(toMinor(l.unit_amount_minor)), amountMinor: fromMinor(toMinor(l.amount_minor)) })),
+    lines.map((l) => ({ position: Number(l.position), description: l.description, quantity: String(l.quantity), unitAmountMinor: fromMinor(toMinor(l.unit_amount_minor)), amountMinor: fromMinor(toMinor(l.amount_minor)), taxMinor: fromMinor(toMinor(l.tax_minor ?? 0)), accountCode: l.account_code })),
     payments.map((p) => ({ id: p.id, occurredAt: p.occurred_at, amountMinor: fromMinor(toMinor(p.amount_minor)), rateToBase: p.rate_to_base, baseMinor: fromMinor(toMinor(p.base_minor)), reference: p.reference, transactionId: p.transaction_id })),
   );
 }
@@ -359,7 +402,8 @@ export async function listInvoices(db: LedgerDb, companyId: string, opts: { stat
 function invoiceFromRow(r: InvoiceRow, lines: InvoiceLine[], payments: InvoicePayment[]): Invoice {
   const total = toMinor(r.total_minor);
   const paid = toMinor(r.paid_minor);
-  const outstanding = r.status === 'written_off' || r.status === 'void' || r.status === 'draft' ? 0n : total - paid;
+  const opening = toMinor(r.opening_paid_minor ?? 0);
+  const outstanding = r.status === 'written_off' || r.status === 'void' || r.status === 'draft' ? 0n : total - opening - paid;
   let methods: PaymentInstruction[] = [];
   try { methods = typeof r.payment_methods === 'string' ? (JSON.parse(r.payment_methods) as PaymentInstruction[]) : ((r.payment_methods as PaymentInstruction[]) ?? []); } catch { methods = []; }
   return {
@@ -376,8 +420,13 @@ function invoiceFromRow(r: InvoiceRow, lines: InvoiceLine[], payments: InvoicePa
     rateToBase: rateString(parseRate(r.rate_to_base ?? '1')),
     issuedAt: r.issued_at,
     dueAt: r.due_at,
+    reference: r.reference ?? null,
+    subtotalMinor: fromMinor(r.subtotal_minor === null || r.subtotal_minor === undefined ? total : toMinor(r.subtotal_minor)),
+    taxMinor: fromMinor(toMinor(r.tax_minor ?? 0)),
     totalMinor: fromMinor(total),
     baseTotalMinor: fromMinor(r.base_total_minor === null || r.base_total_minor === undefined ? total : toMinor(r.base_total_minor)),
+    openingPaidMinor: fromMinor(opening),
+    conversion: r.conversion === true,
     paidMinor: fromMinor(paid),
     outstandingMinor: fromMinor(outstanding < 0n ? 0n : outstanding),
     paymentMethods: Array.isArray(methods) ? methods : [],
@@ -437,21 +486,40 @@ export async function issueInvoice(
   await db.sql.execute(`UPDATE ${table(db, 'invoices')} SET payment_methods = $3::jsonb WHERE company_id = $1 AND id = $2::uuid AND status = 'draft'`, [companyId, id, JSON.stringify(methods)]);
   const issuedAt = toIso(opts.issuedAt ?? new Date());
   const fx = inv.currency !== inv.baseCurrency ? ` (${inv.currency} ${fromMinor(toMinor(inv.totalMinor))} at ${inv.rateToBase})` : '';
-  await postTransaction(db, {
-    companyId,
-    occurredAt: issuedAt,
-    description: `Invoice ${inv.number} · ${inv.customerName}${fx}`,
-    sourcePlatform: 'manual',
-    sourceKind: 'invoice',
-    sourceRef: ISSUE_REF(inv.id),
-    currency: inv.baseCurrency,
-    createdBy: opts.createdBy ?? 'board',
-    entries: [
-      { accountCode: ACCOUNT.RECEIVABLES, direction: 'debit', amountMinor: baseTotal, subject: inv.subject },
-      { accountCode: ACCOUNT.SERVICE_INCOME, direction: 'credit', amountMinor: baseTotal, subject: inv.subject },
-    ],
-  });
-  await setStatus(db, companyId, id, ['draft'], 'issued', issuedAt);
+  if (!inv.conversion) {
+    // Income per account (default 4000), tax to 2100; the last income line takes the rounding so credits equal the receivable.
+    const rate = parseRate(inv.rateToBase);
+    const byAccount = new Map<string, Minor>();
+    for (const l of inv.lines) {
+      const code = l.accountCode ?? ACCOUNT.SERVICE_INCOME;
+      byAccount.set(code, (byAccount.get(code) ?? 0n) + toMinor(l.amountMinor));
+    }
+    const taxBase = toBase(toMinor(inv.taxMinor), rate);
+    const entries: EntryInput[] = [{ accountCode: ACCOUNT.RECEIVABLES, direction: 'debit', amountMinor: baseTotal, subject: inv.subject }];
+    let credited = 0n;
+    const codes = [...byAccount.keys()];
+    codes.forEach((code, i) => {
+      const last = i === codes.length - 1;
+      const amount = last ? baseTotal - taxBase - credited : toBase(byAccount.get(code)!, rate);
+      credited += amount;
+      if (amount > 0n) entries.push({ accountCode: code, direction: 'credit', amountMinor: amount, subject: inv.subject });
+    });
+    if (taxBase > 0n) entries.push({ accountCode: ACCOUNT.TAX_PAYABLE, direction: 'credit', amountMinor: taxBase, subject: inv.subject });
+    await postTransaction(db, {
+      companyId,
+      occurredAt: issuedAt,
+      description: `Invoice ${inv.number} · ${inv.customerName}${fx}`,
+      sourcePlatform: 'manual',
+      sourceKind: 'invoice',
+      sourceRef: ISSUE_REF(inv.id),
+      currency: inv.baseCurrency,
+      createdBy: opts.createdBy ?? 'board',
+      entries,
+    });
+  }
+  const opening = toMinor(inv.openingPaidMinor);
+  const first: InvoiceStatus = opening >= toMinor(inv.totalMinor) ? 'paid' : opening > 0n ? 'part_paid' : 'issued';
+  await setStatus(db, companyId, id, ['draft'], first, issuedAt);
   const after = await getInvoice(db, companyId, id);
   if (!after) throw new LedgerError('invoice vanished while issuing', 'invalid');
   return after;
@@ -483,7 +551,8 @@ export async function recordPayment(
   const payRate = input.rateToBase === undefined || input.rateToBase === null || input.rateToBase === '' ? issueRate : parseRate(input.rateToBase);
   const cashBase = toBase(amount, payRate);
   // Relieve the receivable in proportion; the last payment takes whatever is left so rounding never strands a cent.
-  const remainingBase = toMinor(inv.baseTotalMinor) - inv.payments.reduce((s, p) => s + toBase(toMinor(p.amountMinor), issueRate), 0n);
+  const owedBase = toBase(toMinor(inv.totalMinor) - toMinor(inv.openingPaidMinor), issueRate);
+  const remainingBase = owedBase - inv.payments.reduce((s, p) => s + toBase(toMinor(p.amountMinor), issueRate), 0n);
   const reliefBase = amount === outstanding ? remainingBase : toBase(amount, issueRate);
   const diff = cashBase - reliefBase; // positive: gain
   const ref = (input.reference ?? '').trim() || newId();
@@ -537,7 +606,7 @@ export async function writeOffInvoice(
     throw new LedgerError(`invoice ${inv.number} is ${inv.status}; only an issued invoice can be written off`, 'invalid');
   }
   const issueRate = parseRate(inv.rateToBase);
-  const remainingBase = toMinor(inv.baseTotalMinor) - inv.payments.reduce((s, p) => s + toBase(toMinor(p.amountMinor), issueRate), 0n);
+  const remainingBase = toBase(toMinor(inv.totalMinor) - toMinor(inv.openingPaidMinor), issueRate) - inv.payments.reduce((s, p) => s + toBase(toMinor(p.amountMinor), issueRate), 0n);
   if (remainingBase > 0n) {
     await postTransaction(db, {
       companyId,
@@ -575,8 +644,8 @@ export async function voidInvoice(db: LedgerDb, companyId: string, id: string, o
     await setStatus(db, companyId, id, ['draft'], 'void');
     return (await getInvoice(db, companyId, id)) ?? { ...inv, status: 'void' };
   }
-  if (inv.status !== 'issued') throw new LedgerError(`${inv.number} is ${inv.status}; only a draft or an unpaid issued invoice can be voided`, 'invalid');
   if (toMinor(inv.paidMinor) !== 0n) throw new LedgerError(`${inv.number} has payments on it; write it off or refund it instead`, 'invalid');
+  if (inv.status !== 'issued') throw new LedgerError(`${inv.number} is ${inv.status}; only a draft or an unpaid issued invoice can be voided`, 'invalid');
   const issueTx = await findTransactionBySourceRef(db, companyId, 'manual', ISSUE_REF(inv.id));
   if (issueTx) {
     await postReversal(db, companyId, issueTx, { description: `Void ${inv.number}${opts.reason ? ` · ${opts.reason}` : ''}`, createdBy: opts.createdBy ?? 'board' });

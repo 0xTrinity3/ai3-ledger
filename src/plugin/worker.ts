@@ -83,8 +83,15 @@ import { Ai3Error, hostedStatus, isConnected, publishInvoice, revokeInvoice, sen
 import { TOOL_DECLARATIONS, runTool } from './tools.js';
 import { LEDGER_SKILL_KEY } from './skill.js';
 import { buildBriefing } from './briefing.js';
+import { publishSummary, type IssueLike } from './publish.js';
 import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, requestFaucet, syncWalletFeed } from './tempo.js';
 import { getCase, type Ruling } from './recourse.js';
+import { CHAINS, chainSummary } from './chains.js';
+import { exchangeSummaries } from './exchanges.js';
+import { bookBrowserPayment, connectAddressWallet, connectExchangeAccount, connectedWalletsView, disconnectWallet, ownershipMessage, payFromCompanyWallet, remoteInvoiceView, syncAllConnected, syncWalletForBank } from './pay.js';
+import { registerBooks } from './books.js';
+import { connectStripe, refreshStripe, syncStripeFeed, stripeStatus } from './stripe.js';
+import { getStripeLink } from '../core/index.js';
 
 const CURRENCY = 'USD';
 const SWEEP_JOB = 'sweep';
@@ -470,17 +477,19 @@ const plugin = definePlugin({
       if (!inv) throw new Error('Invoice not found');
       const settings = await getSettings(ledger(), companyId, CURRENCY);
       let sender: { email: string; via: string } | null | undefined;
+      let hostedPayments: NonNullable<Awaited<ReturnType<typeof hostedStatus>>['payments']> = [];
       if (inv.hosted && isConnected(settings)) {
         try {
           const st = await hostedStatus(httpFetch, settings, companyId, inv.hosted.token);
           sender = st.sender ?? null;
+          hostedPayments = st.payments ?? [];
           if (st.openedAt && (!inv.hosted.openedAt || st.openCount !== inv.hosted.openCount)) {
             await markInvoiceOpened(ledger(), companyId, inv.id, st.openedAt, st.openCount);
             inv = (await getInvoice(ledger(), companyId, inv.id)) ?? inv;
           }
         } catch { /* offline: show what we have */ }
       }
-      return { ...inv, connected: isConnected(settings), sender: sender ?? null };
+      return { ...inv, connected: isConnected(settings), sender: sender ?? null, hostedPayments };
     });
     // Who the company is, for report headers. Cached for the worker's life.
     const companyNames = new Map<string, string>();
@@ -666,7 +675,41 @@ const plugin = definePlugin({
         ...(params['ai3Key'] !== undefined ? { ai3Key: pick('ai3Key') ?? null } : {}),
         ...(params['ai3Origin'] !== undefined ? { ai3Origin: pick('ai3Origin') ?? null } : {}),
         ...(params['remindersEnabled'] !== undefined ? { remindersEnabled: params['remindersEnabled'] === true } : {}),
+        ...(params['leaderboardOptIn'] !== undefined ? { leaderboardOptIn: params['leaderboardOptIn'] === true } : {}),
       });
+    });
+    // Push this company's figures to ai3.co now (the daily job does the same for every company).
+    const issuesFor = async (companyId: string): Promise<IssueLike[] | null> => {
+      try {
+        const issues = await context.issues.list({ companyId, limit: 500 });
+        return issues.map((i) => ({ status: String(i.status), updatedAt: String(i.updatedAt) }));
+      } catch {
+        return null;
+      }
+    };
+    context.actions.register('summary.publish', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      await seedAccounts(ledger(), companyId, CURRENCY);
+      const r = await publishSummary(ledger(), httpFetch, { companyId, companyName: await nameOf(companyId), issues: await issuesFor(companyId), baseCurrency: CURRENCY });
+      if (!r.published) throw new Error('Not connected to ai3.co. Add the company key under Finance › Settings.');
+      return { published: true, leaderboardOptIn: r.payload?.leaderboardOptIn ?? false, asOf: r.payload?.summary.asOf ?? null };
+    });
+    context.jobs.register('publish', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let published = 0;
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          await seedAccounts(ledger(), company.id, CURRENCY);
+          const r = await publishSummary(ledger(), httpFetch, { companyId: company.id, companyName: company.name, issues: await issuesFor(company.id), baseCurrency: CURRENCY });
+          if (r.published) published += 1;
+        } catch (err) {
+          failures.push(`${company.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      context.logger.info('ledger: publish done', { runId: job.runId, published, failed: failures.length });
+      if (failures.length > 0) throw new Error(`summary not published: ${failures.join('; ')}`.slice(0, 1000));
     });
     // Hosted invoice pages on ai3.co and sending
     const publish = async (companyId: string, invoiceId: string) => {
@@ -912,6 +955,37 @@ const plugin = definePlugin({
       return { wallet: { address: w.address, network: w.network, networkLabel: TEMPO_NETWORK_LABEL, asset: PATH_USD_SYMBOL, balanceMinor: balance === null ? null : balance.toString(), explorer: explorerAddress(w.address), bankAccountId: w.bankAccountId, createdAt: w.createdAt } };
     });
     context.data.register('disputes', async (params) => ({ disputes: await listDisputes(ledger(), await companyOf(params)) }));
+    // Stripe through ai3.co: what the books know (no network) plus, when connected, what ai3.co says now.
+    context.data.register('stripe', async (params) => {
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      const link = await getStripeLink(ledger(), companyId);
+      let remote = null;
+      if (isConnected(settings)) {
+        try { remote = await stripeStatus(httpFetch, settings, companyId); } catch (err) { remote = { warning: err instanceof Error ? err.message : String(err) }; }
+      }
+      return { ai3Connected: isConnected(settings), link, remote };
+    });
+    context.actions.register('stripe.connect', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      const r = await connectStripe(ledger(), httpFetch, settings, companyId, { email: s(params['email']) ?? null, country: s(params['country']) ?? null, companyName: await companyNameOf(companyId) }, CURRENCY);
+      return { ...r.remote, bankAccountId: r.link.bankAccountId, paymentMethodId: r.link.paymentMethodId };
+    });
+    context.actions.register('stripe.status', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      const r = await refreshStripe(ledger(), httpFetch, settings, companyId, CURRENCY);
+      return { ...r.remote, bankAccountId: r.link?.bankAccountId ?? null };
+    });
+    context.actions.register('stripe.sync', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      return (await syncStripeFeed(ledger(), httpFetch, settings, companyId, { by: 'board', autoPost: params['autoPost'] !== false })) ?? { imported: 0, notConnected: true };
+    });
     context.actions.register('wallet.create', async (params, ctx) => {
       boardOnly(ctx);
       const companyId = await companyOf(params);
@@ -929,6 +1003,72 @@ const plugin = definePlugin({
       const companyId = await companyOf(params);
       return (await syncWalletFeed(ledger(), companyId, { by: 'board', autoPost: params['autoPost'] !== false })) ?? { imported: 0 };
     });
+    // Connected wallets: addresses watched on a chain, exchange accounts read by key.
+    context.data.register('chains', async (params) => {
+      await companyOf(params);
+      return { chains: Object.values(CHAINS).map(chainSummary), exchanges: exchangeSummaries() };
+    });
+    context.data.register('connected-wallets', async (params) => {
+      const companyId = await companyOf(params);
+      return { companyId, wallets: await connectedWalletsView(ledger(), companyId) };
+    });
+    context.data.register('ownership-message', async (params) => {
+      const companyId = await companyOf(params);
+      const address = String(params['address'] ?? '');
+      const at = new Date().toISOString();
+      return { message: ownershipMessage(await companyNameOf(companyId), address, at), at };
+    });
+    context.actions.register('wallet.connect', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const proof = params['proof'] && typeof params['proof'] === 'object' ? (params['proof'] as { message?: unknown; signature?: unknown }) : null;
+      const r = await connectAddressWallet(ledger(), companyId, {
+        label: s(params['label']) ?? null, network: String(params['network'] ?? ''), address: String(params['address'] ?? ''),
+        proof: proof && typeof proof.message === 'string' && typeof proof.signature === 'string' ? { message: proof.message, signature: proof.signature } : null,
+        sinceDays: Number(params['sinceDays'] ?? 0) || 0,
+      }, by);
+      return { ...r.wallet, chain: chainSummary(r.chain), proven: r.proven };
+    });
+    context.actions.register('wallet.exchange', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const r = await connectExchangeAccount(ledger(), httpFetch, companyId, {
+        label: s(params['label']) ?? null, exchange: String(params['exchange'] ?? ''), apiKey: String(params['apiKey'] ?? ''), secret: String(params['secret'] ?? ''),
+        passphrase: s(params['passphrase']) ?? null, currency: String(params['currency'] ?? 'USD'), sinceDays: Number(params['sinceDays'] ?? 30) || 30,
+      }, by);
+      return { ...r.wallet, detail: r.detail };
+    });
+    context.actions.register('wallet.disconnect', async (params, ctx) => {
+      boardOnly(ctx);
+      return disconnectWallet(ledger(), await companyOf(params), String(params['walletId'] ?? ''));
+    });
+    context.actions.register('feed.sync', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      return syncWalletForBank(ledger(), httpFetch, companyId, String(params['walletId'] ?? ''), { by: 'board', autoPost: params['autoPost'] !== false });
+    });
+    // Paying an invoice by its link: from the company wallet here, or booked after the person paid from their own wallet in the browser.
+    context.data.register('remote-invoice', async (params) => {
+      const companyId = await companyOf(params);
+      const w = await getWallet(ledger(), companyId);
+      return remoteInvoiceView(httpFetch, String(params['url'] ?? ''), w?.address ?? null);
+    });
+    context.actions.register('invoice.pay', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      return payFromCompanyWallet(ledger(), httpFetch, companyId, {
+        invoiceUrl: s(params['invoiceUrl']) ?? null, to: s(params['to']) ?? null, amountMinor: s(params['amountMinor']) ?? null, memo: s(params['memo']) ?? null,
+        description: s(params['description']) ?? null, accountCode: s(params['accountCode']) ?? null, billId: s(params['billId']) ?? null,
+      }, by, CURRENCY);
+    });
+    context.actions.register('invoice.pay-book', async (params, ctx) => {
+      const by = boardOnly(ctx);
+      const companyId = await companyOf(params);
+      return bookBrowserPayment(ledger(), httpFetch, companyId, {
+        network: String(params['network'] ?? ''), txHash: String(params['txHash'] ?? ''), from: String(params['from'] ?? ''), to: String(params['to'] ?? ''), amountMinor: String(params['amountMinor'] ?? '0'),
+        description: s(params['description']) ?? null, accountCode: s(params['accountCode']) ?? null, billId: s(params['billId']) ?? null, invoiceUrl: s(params['invoiceUrl']) ?? null,
+      }, by);
+    });
     // Every five minutes: read the chain into each wallet's bank account and
     // post what the matcher is sure of; refresh disputes still being decided.
     context.jobs.register('chain-feed', async (job) => {
@@ -940,6 +1080,19 @@ const plugin = definePlugin({
         try {
           const r = await syncWalletFeed(ledger(), company.id, { by: 'chain-feed' });
           if (r) { imported += r.imported; posted += r.autoPosted; }
+          // Connected wallets and exchange accounts on the same cadence; a failing one is noted on the wallet, not thrown.
+          for (const cw of await syncAllConnected(ledger(), httpFetch, company.id, { by: 'chain-feed' })) {
+            imported += cw.imported;
+            posted += cw.autoPosted;
+            if (cw.error) context.logger.warn('ledger: wallet feed failed', { companyId: company.id, wallet: cw.label, error: cw.error });
+          }
+          // Stripe balance on the same cadence, for companies that connected it.
+          try {
+            const st = await syncStripeFeed(ledger(), httpFetch, await getSettings(ledger(), company.id, CURRENCY), company.id, { by: 'stripe-feed' });
+            if (st) { imported += st.imported; posted += st.autoPosted; }
+          } catch (err) {
+            failures.push(`${company.name} (stripe): ${err instanceof Error ? err.message : String(err)}`);
+          }
           for (const d of await listDisputes(ledger(), company.id)) {
             if (!d.caseId || d.ruling || !(d.status === 'pending' || d.status === 'filed')) continue;
             const rec = await getCase(httpFetch, d.caseId).catch(() => null);
@@ -957,6 +1110,8 @@ const plugin = definePlugin({
     // A fresh tenant should not wait for the next quarter hour: first sweep
     // (which also installs the company skill) shortly after boot.
     setTimeout(() => { void sweepAll().catch((err) => context.logger.warn('ledger: first sweep failed', { error: err instanceof Error ? err.message : String(err) })); }, 20_000);
+    // Journals, trial balance, drill-down, bills, documents, imports.
+    registerBooks(context, { ledger, companyOf, boardOnly, httpFetch, currency: CURRENCY });
     context.logger.info('ledger: ready', { namespace: context.db.namespace });
   },
 

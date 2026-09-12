@@ -127,3 +127,142 @@ export async function getDispute(db: LedgerDb, companyId: string, idOrCase: stri
   const rows = await db.sql.query<DisputeRow>(`${DISPUTE_SELECT(db)} WHERE company_id = $1 AND (id::text = $2 OR case_id = $2) LIMIT 1`, [companyId, idOrCase]);
   return rows[0] ? disputeFromRow(rows[0]) : null;
 }
+
+// ---------------------------------------------------------------------------
+// Connected wallets: an address the company watches, or an exchange it reads
+// ---------------------------------------------------------------------------
+
+export type ConnectedWalletKind = 'address' | 'exchange';
+
+export interface ConnectedWallet {
+  id: string;
+  companyId: string;
+  kind: ConnectedWalletKind;
+  label: string;
+  /** chain slug for an address wallet (tempo-moderato, base, ethereum) */
+  network: string | null;
+  address: string | null;
+  /** exchange id for an exchange account (coinbase, kraken, binance) */
+  exchange: string | null;
+  currency: string;
+  hasCredentials: boolean;
+  /** the ownership signature for an address wallet, when one was given */
+  proof: { message: string; signature: string; at: string } | null;
+  bankAccountId: string | null;
+  cursor: Record<string, unknown> | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  archivedAt: string | null;
+}
+
+interface ConnectedRow {
+  id: string; company_id: string; kind: ConnectedWalletKind; label: string; network: string | null; address: string | null; exchange: string | null; currency: string;
+  has_credentials: boolean; proof: unknown; bank_account_id: string | null; cursor_json: unknown; last_sync_at: string | null; last_error: string | null; created_by: string | null; created_at: string; archived_at: string | null;
+}
+
+const CONNECTED_SELECT = (db: LedgerDb) => `SELECT id, company_id, kind, label, network, address, exchange, currency, (credentials IS NOT NULL) AS has_credentials, proof, bank_account_id, cursor_json,
+  last_sync_at::text AS last_sync_at, last_error, created_by, created_at::text AS created_at, archived_at::text AS archived_at FROM ${table(db, 'connected_wallets')}`;
+
+function connectedFromRow(r: ConnectedRow): ConnectedWallet {
+  return {
+    id: r.id, companyId: r.company_id, kind: r.kind, label: r.label, network: r.network, address: r.address, exchange: r.exchange, currency: r.currency,
+    hasCredentials: r.has_credentials === true, proof: (parseJson(r.proof) as ConnectedWallet['proof']) ?? null, bankAccountId: r.bank_account_id,
+    cursor: (parseJson(r.cursor_json) as Record<string, unknown> | null) ?? null, lastSyncAt: r.last_sync_at, lastError: r.last_error, createdBy: r.created_by, createdAt: r.created_at, archivedAt: r.archived_at,
+  };
+}
+
+export const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+export async function listConnectedWallets(db: LedgerDb, companyId: string, opts: { includeArchived?: boolean } = {}): Promise<ConnectedWallet[]> {
+  const rows = await db.sql.query<ConnectedRow>(`${CONNECTED_SELECT(db)} WHERE company_id = $1 AND ($2::boolean OR archived_at IS NULL) ORDER BY created_at`, [companyId, opts.includeArchived === true]);
+  return rows.map(connectedFromRow);
+}
+
+export async function getConnectedWallet(db: LedgerDb, companyId: string, id: string): Promise<ConnectedWallet | null> {
+  const rows = await db.sql.query<ConnectedRow>(`${CONNECTED_SELECT(db)} WHERE company_id = $1 AND id = $2::uuid`, [companyId, id]);
+  return rows[0] ? connectedFromRow(rows[0]) : null;
+}
+
+/** The connected wallet behind a bank account, if the account is one. */
+export async function connectedWalletForBank(db: LedgerDb, companyId: string, bankAccountId: string): Promise<ConnectedWallet | null> {
+  const rows = await db.sql.query<ConnectedRow>(`${CONNECTED_SELECT(db)} WHERE company_id = $1 AND bank_account_id = $2::uuid AND archived_at IS NULL LIMIT 1`, [companyId, bankAccountId]);
+  return rows[0] ? connectedFromRow(rows[0]) : null;
+}
+
+/** The active address wallet on a network, matched case-insensitively. */
+export async function findConnectedAddress(db: LedgerDb, companyId: string, network: string, address: string): Promise<ConnectedWallet | null> {
+  const rows = await db.sql.query<ConnectedRow>(`${CONNECTED_SELECT(db)} WHERE company_id = $1 AND kind = 'address' AND network = $2 AND lower(address) = lower($3) AND archived_at IS NULL LIMIT 1`, [companyId, network, address]);
+  return rows[0] ? connectedFromRow(rows[0]) : null;
+}
+
+export async function createConnectedWallet(
+  db: LedgerDb,
+  companyId: string,
+  input: { kind: ConnectedWalletKind; label: string; network?: string | null; address?: string | null; exchange?: string | null; currency: string; credentials?: string | null; proof?: ConnectedWallet['proof']; bankAccountId?: string | null; cursor?: Record<string, unknown> | null; createdBy?: string | null },
+): Promise<ConnectedWallet> {
+  const label = String(input.label ?? '').trim();
+  if (label.length < 1 || label.length > 120) throw new LedgerError('a wallet needs a label of 1 to 120 characters', 'invalid');
+  if (input.kind === 'address') {
+    if (!input.network) throw new LedgerError('an address wallet needs a network', 'invalid');
+    if (!input.address || !EVM_ADDRESS.test(input.address)) throw new LedgerError('the address must be a 0x address of 40 hex characters', 'invalid');
+    if (await findConnectedAddress(db, companyId, input.network, input.address)) throw new LedgerError('that address is already connected on this network', 'invalid');
+  } else if (input.kind === 'exchange') {
+    if (!input.exchange) throw new LedgerError('an exchange account needs the exchange', 'invalid');
+    if (!input.credentials) throw new LedgerError('an exchange account needs credentials', 'invalid');
+  } else {
+    throw new LedgerError('kind must be address or exchange', 'invalid');
+  }
+  const id = newId();
+  await db.sql.execute(
+    `INSERT INTO ${table(db, 'connected_wallets')} (id, company_id, kind, label, network, address, exchange, currency, credentials, proof, bank_account_id, cursor_json, created_by)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::uuid, $12::jsonb, $13)`,
+    [id, companyId, input.kind, label, input.network ?? null, input.address ?? null, input.exchange ?? null, input.currency, input.credentials ?? null, input.proof ? JSON.stringify(input.proof) : null, input.bankAccountId ?? null, input.cursor ? JSON.stringify(input.cursor) : null, input.createdBy ?? null],
+  );
+  const w = await getConnectedWallet(db, companyId, id);
+  if (!w) throw new LedgerError('wallet was not written', 'invalid');
+  return w;
+}
+
+/** The sealed credentials of an exchange account. Only the plugin's vault unseals them. */
+export async function readConnectedCredentials(db: LedgerDb, companyId: string, id: string): Promise<string | null> {
+  const rows = await db.sql.query<{ credentials: string | null }>(`SELECT credentials FROM ${table(db, 'connected_wallets')} WHERE company_id = $1 AND id = $2::uuid`, [companyId, id]);
+  return rows[0]?.credentials ?? null;
+}
+
+export async function setConnectedSync(db: LedgerDb, companyId: string, id: string, patch: { cursor?: Record<string, unknown> | null; lastError?: string | null }): Promise<void> {
+  const cur = await getConnectedWallet(db, companyId, id);
+  if (!cur) throw new LedgerError('wallet not found', 'invalid');
+  await db.sql.execute(
+    `UPDATE ${table(db, 'connected_wallets')} SET cursor_json = $3::jsonb, last_error = $4, last_sync_at = now() WHERE company_id = $1 AND id = $2::uuid`,
+    [companyId, id, JSON.stringify(patch.cursor === undefined ? cur.cursor : patch.cursor), patch.lastError === undefined ? null : patch.lastError?.slice(0, 500) ?? null],
+  );
+}
+
+/** Stop watching. The bank account and its lines stay in the books; the account is archived. */
+export async function archiveConnectedWallet(db: LedgerDb, companyId: string, id: string): Promise<ConnectedWallet> {
+  const cur = await getConnectedWallet(db, companyId, id);
+  if (!cur) throw new LedgerError('wallet not found', 'invalid');
+  await db.sql.execute(`UPDATE ${table(db, 'connected_wallets')} SET archived_at = now(), credentials = NULL WHERE company_id = $1 AND id = $2::uuid AND archived_at IS NULL`, [companyId, id]);
+  if (cur.bankAccountId) await db.sql.execute(`UPDATE ${table(db, 'bank_accounts')} SET archived_at = now() WHERE company_id = $1 AND id = $2::uuid AND archived_at IS NULL`, [companyId, cur.bankAccountId]);
+  return (await getConnectedWallet(db, companyId, id)) ?? cur;
+}
+
+// ---------------------------------------------------------------------------
+// Vault key: one random key per plugin database, used to seal credentials
+// ---------------------------------------------------------------------------
+
+export async function getVaultKey(db: LedgerDb): Promise<string | null> {
+  const rows = await db.sql.query<{ key_b64: string }>(`SELECT key_b64 FROM ${table(db, 'ledger_vault')} WHERE id = 1`, []);
+  return rows[0]?.key_b64 ?? null;
+}
+
+export async function ensureVaultKey(db: LedgerDb, generate: () => string): Promise<string> {
+  const have = await getVaultKey(db);
+  if (have) return have;
+  await db.sql.execute(`INSERT INTO ${table(db, 'ledger_vault')} (id, key_b64) VALUES (1, $1) ON CONFLICT (id) DO NOTHING`, [generate()]);
+  const now = await getVaultKey(db);
+  if (!now) throw new LedgerError('vault key was not written', 'invalid');
+  return now;
+}

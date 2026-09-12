@@ -15,6 +15,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useHostContext, useHostLocation, useHostNavigation, usePluginAction, usePluginData, usePluginToast, ErrorBoundary, Spinner } from '@paperclipai/plugin-sdk/ui';
 import type { PluginPageProps, PluginSidebarProps } from '@paperclipai/plugin-sdk/ui';
+import { BillsTab, EntriesView, ImportTab, JournalsTab, TransactionDetail, TrialBalanceCard, entriesLink } from './books.js';
+import { connectWallet, discoverWallets, sendToken, signMessage, short, waitForReceipt, WalletError, type ChainInfo, type DiscoveredWallet } from './wallet.js';
 
 // ---------------------------------------------------------------------------
 // Theme: one stylesheet, host variables, own class names.
@@ -148,9 +150,9 @@ function useStyles() {
 // Money and dates
 // ---------------------------------------------------------------------------
 
-const SYMBOL: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' };
+export const SYMBOL: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' };
 
-function fmt(minor: string | number | bigint | null | undefined, opts: { currency?: string; paren?: boolean; symbol?: boolean } = {}): string {
+export function fmt(minor: string | number | bigint | null | undefined, opts: { currency?: string; paren?: boolean; symbol?: boolean } = {}): string {
   if (minor === null || minor === undefined || minor === '') return '—';
   const n = typeof minor === 'bigint' ? minor : typeof minor === 'number' ? BigInt(Math.trunc(minor)) : BigInt(minor);
   const neg = n < 0n;
@@ -163,41 +165,41 @@ function fmt(minor: string | number | bigint | null | undefined, opts: { currenc
   return opts.paren ? `(${body})` : `-${body}`;
 }
 
-function toMinor(amount: string): string {
+export function toMinor(amount: string): string {
   const [w, c = ''] = amount.trim().split('.');
   return `${BigInt(w || '0') * 100n + BigInt((c + '00').slice(0, 2))}`;
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function dateLong(iso: string | null | undefined): string {
+export function dateLong(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-function today(): string {
+export function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function plusDays(iso: string, days: number): string {
+export function plusDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
-function daysBetween(a: string, b: string): number {
+export function daysBetween(a: string, b: string): number {
   return Math.floor((Date.parse(`${b.slice(0, 10)}T00:00:00Z`) - Date.parse(`${a.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
 }
 
-const AMOUNT = /^\d+(\.\d{1,2})?$/;
+export const AMOUNT = /^\d+(\.\d{1,2})?$/;
 
 // ---------------------------------------------------------------------------
 // Data shapes (loose mirrors of the worker's JSON)
 // ---------------------------------------------------------------------------
 
-interface Company { name: string; currency: string; settings?: Settings }
+export interface Company { name: string; currency: string; settings?: Settings }
 interface Position {
   currency: string | null;
   treasuryMinor: string;
@@ -214,13 +216,14 @@ interface Tx { id: string; occurredAt: string; description: string; sourceKind: 
 interface InvoiceLine { position: number; description: string; quantity: string; unitAmountMinor: string; amountMinor: string }
 interface Invoice {
   id: string; number: string; status: string; customerName: string; customerEmail: string | null; customerId: string; currency: string; baseCurrency: string; rateToBase: string;
-  issuedAt: string | null; dueAt: string | null; createdAt: string; totalMinor: string; baseTotalMinor: string; paidMinor: string; outstandingMinor: string; lines: InvoiceLine[];
+  issuedAt: string | null; dueAt: string | null; createdAt: string; subtotalMinor?: string; taxMinor?: string; totalMinor: string; baseTotalMinor: string; paidMinor: string; outstandingMinor: string; lines: InvoiceLine[];
   paymentMethods: Array<{ id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails }>;
   notes: string | null;
   payments: Array<{ id: string; occurredAt: string; amountMinor: string; rateToBase: string; baseMinor: string; reference: string | null }>;
   hosted: { token: string; url: string; hostedAt: string; sentAt: string | null; sentTo: string | null; openedAt: string | null; openCount: number } | null;
   connected?: boolean;
   sender?: { email: string; via: string } | null;
+  hostedPayments?: Array<{ at: string; amountMinor: string; currency: string; via: string; ref: string; network?: string | null; from?: string | null; explorer?: string | null }>;
 }
 interface Customer { id: string; name: string; email: string | null }
 interface Period { id: string; label: string; startsOn: string; endsOn: string; status: 'open' | 'closed' }
@@ -236,7 +239,7 @@ interface BalanceSheet { asOf: string; assets: BsSection; liabilities: BsSection
 // Shared bits
 // ---------------------------------------------------------------------------
 
-function useRun(refreshers: Array<() => void>) {
+export function useRun(refreshers: Array<() => void>) {
   const toast = usePluginToast();
   const [busy, setBusy] = useState(false);
   async function run(fn: () => Promise<unknown>, done: string): Promise<boolean> {
@@ -256,12 +259,12 @@ function useRun(refreshers: Array<() => void>) {
   return { run, busy };
 }
 
-function Failure({ error }: { error: { message: string } | null | undefined }) {
+export function Failure({ error }: { error: { message: string } | null | undefined }) {
   if (!error) return null;
   return <div className="ai3-card" style={{ borderColor: 'var(--ai3-red)', marginBottom: 14 }}>{error.message}</div>;
 }
 
-function Header({ crumb, title, sub, actions }: { crumb: React.ReactNode; title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
+export function Header({ crumb, title, sub, actions }: { crumb: React.ReactNode; title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <>
       <div className="ai3-crumb">Finance › {crumb}</div>
@@ -276,7 +279,7 @@ function Header({ crumb, title, sub, actions }: { crumb: React.ReactNode; title:
   );
 }
 
-function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: React.CSSProperties }) {
+export function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: React.CSSProperties }) {
   return (
     <div className="ai3-field" style={style}>
       <label>{label}</label>
@@ -502,8 +505,17 @@ function PositionTab({ companyId, company }: { companyId: string; company: Compa
 // ---------------------------------------------------------------------------
 
 function TransactionsTab({ companyId, company }: { companyId: string; company: Company | null }) {
+  const location = useHostLocation();
+  const search = new URLSearchParams(location.search);
+  const filtered = ['account', 'type', 'from', 'to', 'groupBy', 'source'].some((k) => search.has(k));
+  if (filtered) return <EntriesView companyId={companyId} company={company} />;
+  return <TransactionList companyId={companyId} company={company} openId={search.get('open')} />;
+}
+
+function TransactionList({ companyId, company, openId: initialOpen }: { companyId: string; company: Company | null; openId: string | null }) {
   const txs = usePluginData<{ transactions: Tx[] }>('transactions', { companyId, limit: 500 });
   const [q, setQ] = useState('');
+  const [openId, setOpenId] = useState<string | null>(initialOpen);
   const cur = company?.currency ?? 'USD';
   const rows = useMemo(() => {
     const all = txs.data?.transactions ?? [];
@@ -513,7 +525,7 @@ function TransactionsTab({ companyId, company }: { companyId: string; company: C
   const total = rows.reduce((s, t) => s + BigInt(t.entries.find((e) => e.direction === 'debit')?.amountMinor ?? '0'), 0n);
   return (
     <>
-      <Header crumb="Transactions" title="Transactions" sub="Every posted entry, newest first. Nothing here is edited; corrections are reversals." />
+      <Header crumb="Transactions" title="Transactions" sub="Every posted entry, newest first. Nothing here is edited; corrections are reversals. Click a row for where it came from." />
       <Failure error={txs.error} />
       <div className="ai3-card">
         <div className="ai3-toolbar">
@@ -529,15 +541,19 @@ function TransactionsTab({ companyId, company }: { companyId: string; company: C
             {rows.map((t) => {
               const d = t.entries.find((e) => e.direction === 'debit');
               const c = t.entries.find((e) => e.direction === 'credit');
+              const isOpen = openId === t.id;
               return (
-                <tr key={t.id}>
-                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>{dateLong(t.occurredAt)}</td>
-                  <td>{t.description}{d?.subject?.agent ? <span className="muted"> · agent {d.subject.agent.slice(0, 8)}</span> : null}</td>
-                  <td className="muted" style={{ textTransform: 'capitalize' }}>{t.sourceKind.replace('_', ' ')}</td>
-                  <td>{d ? `${d.accountCode} ${d.accountName}` : ''}</td>
-                  <td>{c ? `${c.accountCode} ${c.accountName}` : ''}</td>
-                  <td className="num">{fmt(d?.amountMinor ?? c?.amountMinor ?? '0', { currency: cur })}</td>
-                </tr>
+                <React.Fragment key={t.id}>
+                  <tr className="click" onClick={() => setOpenId(isOpen ? null : t.id)}>
+                    <td className="muted" style={{ whiteSpace: 'nowrap' }}>{dateLong(t.occurredAt)}</td>
+                    <td>{t.description}{d?.subject?.agent ? <span className="muted"> · agent {d.subject.agent.slice(0, 8)}</span> : null}</td>
+                    <td className="muted" style={{ textTransform: 'capitalize' }}>{t.sourceKind.replace('_', ' ')}</td>
+                    <td>{d ? `${d.accountCode} ${d.accountName}${t.entries.filter((e) => e.direction === 'debit').length > 1 ? ' +' : ''}` : ''}</td>
+                    <td>{c ? `${c.accountCode} ${c.accountName}${t.entries.filter((e) => e.direction === 'credit').length > 1 ? ' +' : ''}` : ''}</td>
+                    <td className="num">{fmt(t.entries.filter((e) => e.direction === 'debit').reduce((s, e) => s + BigInt(e.amountMinor), 0n), { currency: cur })}</td>
+                  </tr>
+                  {isOpen && <tr><td colSpan={6} style={{ padding: '0 0 8px' }}><TransactionDetail companyId={companyId} transactionId={t.id} cur={cur} onClose={() => setOpenId(null)} /></td></tr>}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -564,13 +580,13 @@ function statusLabel(s: string): string {
   return { draft: 'Draft', issued: 'Awaiting payment', part_paid: 'Part paid', paid: 'Paid', written_off: 'Written off', void: 'Void' }[s] ?? s;
 }
 
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'SGD', 'JPY', 'USDC', 'USDT', 'DAI'];
+export const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'SGD', 'JPY', 'USDC', 'USDT', 'DAI'];
 const NETWORKS = ['Base', 'Ethereum', 'Solana', 'Polygon', 'Arbitrum', 'Optimism', 'Bitcoin', 'Tron'];
 
-interface PaymentDetails { accountName?: string; bankName?: string; accountNumber?: string; iban?: string; sortCode?: string; routingNumber?: string; bic?: string; url?: string; network?: string; asset?: string; address?: string; instructions?: string }
+interface PaymentDetails { accountName?: string; bankName?: string; accountNumber?: string; iban?: string; sortCode?: string; routingNumber?: string; bic?: string; url?: string; account?: string; network?: string; asset?: string; address?: string; instructions?: string }
 interface PaymentMethod { id: string; kind: 'bank' | 'stripe' | 'crypto' | 'other'; label: string; currency: string | null; details: PaymentDetails; isDefault: boolean; enabled: boolean }
 interface RateQuote { from: string; to: string; rate: string; date: string; source: string }
-interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null; replyTo: string | null; ai3Key: string | null; ai3Origin: string | null; remindersEnabled: boolean }
+export interface Settings { baseCurrency: string; legalName: string | null; address: string | null; email: string | null; taxId: string | null; invoiceFooter: string | null; replyTo: string | null; ai3Key: string | null; ai3Origin: string | null; remindersEnabled: boolean; leaderboardOptIn: boolean; summaryPublishedAt: string | null }
 
 const KIND_TITLE: Record<PaymentMethod['kind'], string> = { bank: 'Bank transfer', stripe: 'Pay online', crypto: 'Crypto', other: 'Other' };
 
@@ -582,6 +598,7 @@ function PayLines({ m }: { m: { kind: PaymentMethod['kind']; label: string; curr
       <div style={{ fontWeight: 600 }}>{m.label}{m.currency ? <span style={{ fontWeight: 400, opacity: 0.65 }}> · {m.currency}</span> : null}</div>
       {m.kind === 'bank' && <>{row('Account name', d.accountName)}{row('Bank', d.bankName)}{row('Account', d.accountNumber)}{row('IBAN', d.iban)}{row('Sort code', d.sortCode)}{row('Routing', d.routingNumber)}{row('BIC', d.bic)}</>}
       {m.kind === 'stripe' && d.url && <div><a href={d.url} target="_blank" rel="noreferrer">{d.url}</a></div>}
+      {m.kind === 'stripe' && !d.url && d.account && <div>Card, Apple Pay or Google Pay on the invoice page, through Stripe</div>}
       {m.kind === 'crypto' && <>{row('Send', d.asset)}{row('Network', d.network)}{row('To', d.address)}</>}
       {m.kind === 'other' && d.instructions && <div style={{ whiteSpace: 'pre-wrap' }}>{d.instructions}</div>}
     </div>
@@ -605,6 +622,7 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
   const [rate, setRate] = useState('');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([{ description: '', quantity: '1', unit: '' }]);
+  const [taxRate, setTaxRate] = useState('');
   const [chosen, setChosen] = useState<Record<string, boolean> | null>(null);
   const [rateTouched, setRateTouched] = useState(false);
   const available = methods.data?.paymentMethods ?? [];
@@ -620,7 +638,11 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
     const q4 = Math.round(Number(l.quantity) * 10_000);
     return (unit * BigInt(q4) + 5_000n) / 10_000n;
   };
-  const total = lines.reduce((s, l) => s + lineTotal(l), 0n);
+  const net = lines.reduce((s, l) => s + lineTotal(l), 0n);
+  const taxBp = /^\d+(\.\d{1,2})?$/.test(taxRate) ? BigInt(Math.round(Number(taxRate) * 100)) : 0n;
+  const lineTax = (l: { quantity: string; unit: string }) => (lineTotal(l) * taxBp + 5_000n) / 10_000n;
+  const taxTotal = lines.reduce((s, l) => s + lineTax(l), 0n);
+  const total = net + taxTotal;
   const rateOk = !foreign || /^\d+(\.\d{1,10})?$/.test(rate);
   const valid = (customerId || (newCustomer && custName.trim())) && lines.every((l) => l.description.trim() && AMOUNT.test(l.unit.replace(/,/g, ''))) && total > 0n && rateOk;
   const baseTotal = foreign && rateOk && rate ? (total * BigInt(Math.round(Number(rate) * 1e6)) + 500_000n) / 1_000_000n : total;
@@ -635,7 +657,7 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
       const inv = (await createInvoice({
         companyId, customerId: cid, dueAt: `${dueDate}T23:59:59.000Z`, currency, rateToBase: foreign ? rate : null, notes,
         paymentMethodIds: available.filter((m) => picked[m.id]).map((m) => m.id),
-        lines: lines.map((l) => ({ description: l.description, quantity: l.quantity || '1', unitAmountMinor: toMinor(l.unit.replace(/,/g, '')) })),
+        lines: lines.map((l) => ({ description: l.description, quantity: l.quantity || '1', unitAmountMinor: toMinor(l.unit.replace(/,/g, '')), taxMinor: taxBp > 0n ? lineTax(l).toString() : null })),
       })) as { id: string; number: string };
       if (thenIssue) await issue({ companyId, invoiceId: inv.id, issuedAt: `${issueDate}T12:00:00.000Z` });
     }, thenIssue ? 'Invoice issued' : 'Draft saved');
@@ -678,6 +700,7 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
             <span className="ai3-cap">{fx.error ? `No rate found: ${fx.error.message}` : fx.data && !rateTouched ? `${fx.data.source}, ${dateLong(fx.data.date)}` : rateTouched ? <a href="#" onClick={(e) => { e.preventDefault(); setRateTouched(false); }}>use the published rate</a> : 'fetching…'}</span>
           </Field>
         )}
+        <Field label="Tax rate % (optional)"><input className="ai3-input" value={taxRate} inputMode="decimal" placeholder="0" onChange={(e) => setTaxRate(e.target.value)} /></Field>
         <Field label="Invoice number"><input className="ai3-input" value="Assigned on save" disabled /></Field>
       </div>
       <table className="ai3-table ai3-lines">
@@ -698,7 +721,8 @@ function InvoiceForm({ companyId, customers, cur, onDone, onCancel }: { companyI
       <div className="ai3-totals">
         <table>
           <tbody>
-            <tr><td>Subtotal</td><td>{fmt(total, { symbol: false })}</td></tr>
+            <tr><td>Subtotal</td><td>{fmt(net, { symbol: false })}</td></tr>
+            {taxTotal > 0n && <tr><td>Tax {taxRate}%</td><td>{fmt(taxTotal, { symbol: false })}</td></tr>}
             <tr className="total"><td>Total {currency}</td><td>{fmt(total, { symbol: false })}</td></tr>
             {foreign && rate && rateOk && <tr><td style={{ fontWeight: 400, opacity: 0.7 }}>Booked as {cur}</td><td style={{ fontWeight: 400, opacity: 0.7 }}>{fmt(baseTotal, { symbol: false })}</td></tr>}
           </tbody>
@@ -762,6 +786,7 @@ function InvoiceDocument({ inv, settings, companyName }: { inv: Invoice; setting
       <div className="ai3-totals">
         <table>
           <tbody>
+            {inv.taxMinor && BigInt(inv.taxMinor) > 0n && <><tr><td>Subtotal</td><td>{fmt(inv.subtotalMinor ?? inv.totalMinor, { symbol: false })}</td></tr><tr><td>Tax</td><td>{fmt(inv.taxMinor, { symbol: false })}</td></tr></>}
             <tr className="total"><td>Total {inv.currency}</td><td>{fmt(inv.totalMinor, { symbol: false })}</td></tr>
             {BigInt(inv.paidMinor) > 0n && <tr><td>Paid</td><td>{fmt(inv.paidMinor, { symbol: false })}</td></tr>}
             {(inv.status === 'issued' || inv.status === 'part_paid') && <tr className="total"><td>Amount due {inv.currency}</td><td>{fmt(outstanding, { symbol: false })}</td></tr>}
@@ -905,6 +930,27 @@ function InvoiceDetail({ companyId, invoice, cur, onChanged }: { companyId: stri
               </label>
             );
           })}
+        </div>
+      )}
+      {(inv.hostedPayments?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Paid on the online copy</div>
+          <table className="ai3-table">
+            <thead><tr><th>Date</th><th>How</th><th>Reference</th><th className="num">{inv.currency}</th><th></th></tr></thead>
+            <tbody>{inv.hostedPayments!.map((p) => {
+              const known = inv.payments.some((x) => x.reference === p.ref);
+              return (
+                <tr key={p.ref}>
+                  <td className="muted">{dateLong(p.at)}</td>
+                  <td>{p.via === 'stripe' ? 'Card' : `Wallet${p.network ? ` on ${p.network}` : ''}${p.from ? ` from ${p.from.slice(0, 6)}…${p.from.slice(-4)}` : ''}`}</td>
+                  <td style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, wordBreak: 'break-all' }}>{p.explorer ? <a href={p.explorer} target="_blank" rel="noreferrer">{p.ref.slice(0, 18)}…</a> : p.ref}</td>
+                  <td className="num">{fmt(p.amountMinor, { symbol: false })}</td>
+                  <td>{known ? <span className="ai3-badge paid">in the books</span> : openStatus ? <button className="ai3-btn small" onClick={() => { setPayAmount(fmt(p.amountMinor, { symbol: false }).replace(/,/g, '')); setPayRef(p.ref); setPayDate(p.at.slice(0, 10)); }}>Use below</button> : null}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+          <p className="ai3-note">Reported by ai3.co from the invoice page. A wallet payment into the company's Tempo wallet also lands through the chain feed; anything else, record it below with the reference filled in.</p>
         </div>
       )}
       {inv.payments.length > 0 && (
@@ -1058,6 +1104,68 @@ function WalletCard({ companyId }: { companyId: string }) {
   );
 }
 
+interface StripeRemote { connected: boolean; accountId: string | null; type: string | null; chargesEnabled: boolean; payoutsEnabled: boolean; detailsSubmitted: boolean; requirementsDue: string[]; disabledReason: string | null; test: boolean; card: { brand: string; last4: string | null; expMonth: number | null; expYear: number | null } | null; cardUrl: string | null; creditsUrl: string | null; dashboardUrl: string | null; onboardingUrl?: string | null; warning?: string }
+interface StripeLink { accountId: string | null; bankAccountId: string | null; paymentMethodId: string | null; chargesEnabled: boolean; lastSyncedAt: string | null }
+
+/** Stripe through ai3.co: take card payments on invoices, keep a card for paying others. */
+function StripeCard({ companyId }: { companyId: string }) {
+  const data = usePluginData<{ ai3Connected: boolean; link: StripeLink | null; remote: Partial<StripeRemote> | null }>('stripe', { companyId });
+  const connect = usePluginAction('stripe.connect');
+  const refresh = usePluginAction('stripe.status');
+  const sync = usePluginAction('stripe.sync');
+  const { run, busy } = useRun([data.refresh]);
+  const [link, setLink] = useState<string | null>(null);
+  const r = data.data?.remote ?? null;
+  const ai3 = data.data?.ai3Connected ?? false;
+  const connected = Boolean(r?.connected);
+  const ready = Boolean(r?.chargesEnabled);
+  const onboard = () => run(async () => {
+    const res = (await connect({ companyId })) as { onboardingUrl?: string | null; chargesEnabled?: boolean };
+    if (res.onboardingUrl) { setLink(res.onboardingUrl); window.open(res.onboardingUrl, '_blank', 'noopener'); }
+  }, 'Stripe onboarding opened in a new tab');
+  return (
+    <div className="ai3-card" style={{ marginTop: 14 }}>
+      <div className="ai3-toolbar">
+        <h3 style={{ margin: 0 }}>Stripe <span className="ctx">cards on invoices · a card for paying others{r?.test ? ' · test mode' : ''}</span></h3>
+        {ready ? <span className="ai3-badge paid">Card payments on</span> : connected ? <span className="ai3-badge issued">Onboarding incomplete</span> : null}
+      </div>
+      {!ai3 ? (
+        <span className="ai3-note">Stripe runs through ai3.co. Connect this company to ai3.co above first.</span>
+      ) : (
+        <>
+          <div className="ai3-grid two">
+            <div>
+              <div className="ai3-cap">Taking card payments</div>
+              <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                {ready ? <>Every invoice carries <strong>Pay by card</strong>; other companies on AI3 can pay you from their saved card. Charges, fees and payouts land in the bank account “Stripe”.</> : connected ? <>Stripe still needs {r?.requirementsDue?.length ? `${r.requirementsDue.length} item(s)` : 'more details'} before charges switch on.{r?.disabledReason ? ` (${r.disabledReason})` : ''}</> : <>Not connected. Onboarding takes a few minutes; an existing Stripe account can be linked.</>}
+              </div>
+              <div className="ai3-actions" style={{ marginTop: 6 }}>
+                {!ready && <button className="ai3-btn primary small" disabled={busy} onClick={onboard}>{connected ? 'Continue Stripe setup' : 'Connect Stripe'}</button>}
+                <button className="ai3-btn small" disabled={busy} onClick={() => run(() => refresh({ companyId }), 'Stripe status refreshed')}>Refresh</button>
+                {ready && <button className="ai3-btn small" disabled={busy} onClick={() => run(() => sync({ companyId }), 'Stripe read into the books')}>Read Stripe now</button>}
+                {r?.dashboardUrl && <a className="ai3-btn small" href={r.dashboardUrl} target="_blank" rel="noreferrer">Stripe dashboard</a>}
+              </div>
+              {link && <div className="ai3-cap" style={{ marginTop: 6, wordBreak: 'break-all' }}>If the tab did not open: <a href={link} target="_blank" rel="noreferrer">{link}</a></div>}
+            </div>
+            <div>
+              <div className="ai3-cap">Paying others by card</div>
+              <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                {r?.card ? <>On file: <strong>{r.card.brand} ···· {r.card.last4}</strong>{r.card.expMonth ? ` (${r.card.expMonth}/${r.card.expYear})` : ''}. Agents can pay other companies’ invoices with it (pay-invoice, rail stripe); each payment is booked against “Card on file (Stripe)”.</> : <>No card on file. Agents can then only pay from the Tempo wallet.</>}
+              </div>
+              <div className="ai3-actions" style={{ marginTop: 6 }}>
+                {r?.cardUrl && <a className="ai3-btn small" href={r.cardUrl} target="_blank" rel="noreferrer">{r.card ? 'Replace card' : 'Add a card'}</a>}
+                {r?.creditsUrl && <a className="ai3-btn small" href={r.creditsUrl} target="_blank" rel="noreferrer">Top up model credits</a>}
+              </div>
+            </div>
+          </div>
+          {r?.warning && <p className="ai3-note">ai3.co: {r.warning}</p>}
+          {r?.test && <p className="ai3-note">Stripe is in test mode: no real money moves. Test card 4242 4242 4242 4242, any future date, any CVC.</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 interface DisputeRow { id: string; invoiceNumber: string | null; role: string; caseId: string | null; status: string; amountMinor: string; currency: string; claim: string; ruling: { summary?: string; fault_allocation?: { claimant_pct: number; respondent_pct: number }; money_instruction?: { type: string; to_respondent_minor: number; to_claimant_minor: number; currency: string } } | null; settledTx: string | null; filedAt: string }
 
 function DisputesList({ companyId }: { companyId: string }) {
@@ -1093,8 +1201,9 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
   const { run, busy } = useRun([data.refresh]);
   const [form, setForm] = useState<Settings | null>(null);
   const [adding, setAdding] = useState(false);
-  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null, remindersEnabled: false };
+  const s = form ?? data.data?.settings ?? { baseCurrency: company?.currency ?? 'USD', legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null, remindersEnabled: false, leaderboardOptIn: false, summaryPublishedAt: null };
   const connected = Boolean(data.data?.settings.ai3Key);
+  const publishNow = usePluginAction('summary.publish');
   const [showKey, setShowKey] = useState(false);
   const setField = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...s, [k]: e.target.value });
   const methods = data.data?.paymentMethods ?? [];
@@ -1149,12 +1258,19 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
           <input type="checkbox" checked={s.remindersEnabled} disabled={busy} onChange={(e) => setForm({ ...s, remindersEnabled: e.target.checked })} />
           <span>Send overdue reminders automatically <span className="ai3-cap" style={{ display: 'inline' }}>· 3, 14 and 30 days past due, from your mailbox, only for invoices that were emailed</span></span>
         </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', cursor: 'pointer' }}>
+          <input type="checkbox" checked={s.leaderboardOptIn} disabled={busy} onChange={(e) => setForm({ ...s, leaderboardOptIn: e.target.checked })} />
+          <span>Show this company on the AI3 leaderboard <span className="ai3-cap" style={{ display: 'inline' }}>· revenue and profit over the trailing 30 days, from these books, refreshed nightly; off by default, switch off to be removed at the next refresh</span></span>
+        </label>
+        {connected && <p className="ai3-note" style={{ margin: '4px 0 0' }}>Your figures reach your portfolio page at ai3.co/companies every night either way{s.summaryPublishedAt ? `; last sent ${new Date(s.summaryPublishedAt).toLocaleString()}` : '; not sent yet'}. Only the leaderboard is public.</p>}
         <div className="ai3-actions">
-          <button className="ai3-btn primary" disabled={busy || !form} onClick={() => run(async () => { await update({ companyId, ai3Key: s.ai3Key ?? '', ai3Origin: s.ai3Origin || 'https://ai3.co', replyTo: s.replyTo ?? '', remindersEnabled: s.remindersEnabled }); setForm(null); }, connected || s.ai3Key ? 'Connection saved' : 'Disconnected')}>Save</button>
+          <button className="ai3-btn primary" disabled={busy || !form} onClick={() => run(async () => { await update({ companyId, ai3Key: s.ai3Key ?? '', ai3Origin: s.ai3Origin || 'https://ai3.co', replyTo: s.replyTo ?? '', remindersEnabled: s.remindersEnabled, leaderboardOptIn: s.leaderboardOptIn }); if (s.ai3Key) { try { await publishNow({ companyId }); } catch { /* the nightly job will retry */ } } setForm(null); }, connected || s.ai3Key ? 'Connection saved' : 'Disconnected')}>Save</button>
+          {connected && <button className="ai3-btn" disabled={busy} onClick={() => run(async () => { await publishNow({ companyId }); }, 'Figures sent to ai3.co')}>Send figures now</button>}
           {connected && <button className="ai3-btn" disabled={busy} onClick={() => run(async () => { await update({ companyId, ai3Key: '', replyTo: s.replyTo ?? '' }); setForm(null); }, 'Disconnected')}>Disconnect</button>}
         </div>
       </div>
       <WalletCard companyId={companyId} />
+      <StripeCard companyId={companyId} />
       <div className="ai3-card" style={{ marginTop: 14 }}>
         <div className="ai3-toolbar">
           <h3 style={{ margin: 0 }}>Payment options <span className="ctx">what customers see under "How to pay"</span></h3>
@@ -1186,7 +1302,7 @@ function InvoicesTab({ companyId, company }: { companyId: string; company: Compa
   const filterParam = new URLSearchParams(location.search).get('status') as InvoiceFilter | null;
   const [filter, setFilter] = useState<InvoiceFilter>(filterParam && FILTERS.some((f) => f.key === filterParam) ? filterParam : 'all');
   const [showNew, setShowNew] = useState(new URLSearchParams(location.search).get('new') === '1');
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(new URLSearchParams(location.search).get('open'));
   const all = invs.data?.invoices ?? [];
   const rows = all.filter(FILTERS.find((f) => f.key === filter)!.test);
   const totalDue = rows.reduce((s, i) => s + BigInt(i.status === 'draft' ? i.totalMinor : i.outstandingMinor), 0n);
@@ -1271,15 +1387,18 @@ function pnlRange(choice: string, periods: Period[], from: string, to: string): 
   return { from: iso(a), to: iso(now), label: `${dateLong(iso(a))} to ${dateLong(iso(now))}` };
 }
 
-function StatementRows({ title, lines, totalLabel, total, cur, sign = 1n }: { title: string; lines: Array<{ code: string; name: string; amount: string }>; totalLabel: string; total: bigint; cur: string; sign?: bigint }) {
+function StatementRows({ title, lines, totalLabel, total, cur, sign = 1n, linkFor, totalLink }: { title: string; lines: Array<{ code: string; name: string; amount: string }>; totalLabel: string; total: bigint; cur: string; sign?: bigint; linkFor?: (code: string, name: string) => string | null; totalLink?: string | null }) {
+  const nav = useHostNavigation();
+  const cell = (href: string | null | undefined, text: string) => (href ? <a {...nav.linkProps(href)} title="See the entries behind this figure">{text}</a> : text);
   return (
     <>
       <tr className="section"><td colSpan={2}>{title}</td></tr>
       {lines.length === 0 && <tr className="line"><td className="muted" style={{ color: 'var(--muted-foreground)' }}>Nothing in this window</td><td className="num">—</td></tr>}
-      {lines.map((l) => (
-        <tr className="line" key={l.code}><td>{l.name}</td><td className="num link">{fmt(BigInt(l.amount) * sign, { symbol: false, paren: true, currency: cur })}</td></tr>
-      ))}
-      <tr className="total"><td>{totalLabel}</td><td className="num">{fmt(total * sign, { symbol: false, paren: true })}</td></tr>
+      {lines.map((l) => {
+        const href = linkFor ? linkFor(l.code, l.name) : null;
+        return <tr className="line" key={l.code}><td>{cell(href, l.name)}</td><td className="num link">{cell(href, fmt(BigInt(l.amount) * sign, { symbol: false, paren: true, currency: cur }))}</td></tr>;
+      })}
+      <tr className="total"><td>{cell(totalLink, totalLabel)}</td><td className="num">{cell(totalLink, fmt(total * sign, { symbol: false, paren: true }))}</td></tr>
     </>
   );
 }
@@ -1296,13 +1415,16 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
   const range = pnlRange(choice, list, from, to);
   const pnl = usePluginData<Pnl>('pnl', { companyId, from: range.from, to: range.to, ...(groupBy ? { groupBy } : {}) });
   const [asOf, setAsOf] = useState(today());
-  const sheet = usePluginData<BalanceSheet>('balance-sheet', { companyId, asOf: `${asOf}T23:59:59.999Z` });
+  const asOfIso = `${asOf}T23:59:59.999Z`;
+  const nav = useHostNavigation();
+  const sheet = usePluginData<BalanceSheet>('balance-sheet', { companyId, asOf: asOfIso });
   const createPeriod = usePluginAction('period.create');
   const closePeriod = usePluginAction('period.close');
   const { run, busy } = useRun([periods.refresh, pnl.refresh]);
   const now = new Date();
   const [month, setMonth] = useState(`${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`);
   const balanceFirst = location.search.includes('view=balance');
+  const trialFirst = location.search.includes('view=trial');
   const selectedPeriod = list.find((p) => p.id === choice);
   const p = pnl.data;
   const b = sheet.data;
@@ -1316,8 +1438,8 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
         <table className="ai3-stmt">
           <thead><tr><th></th><th>{cur}</th></tr></thead>
           <tbody>
-            <StatementRows title="Income" lines={p.lines.filter((l) => l.type === 'income').map((l) => ({ code: l.code, name: l.name, amount: l.amountMinor }))} totalLabel="Total income" total={BigInt(p.incomeMinor)} cur={cur} />
-            <StatementRows title="Expenses" lines={p.lines.filter((l) => l.type === 'expense').map((l) => ({ code: l.code, name: l.name, amount: l.amountMinor }))} totalLabel="Total expenses" total={BigInt(p.expenseMinor)} cur={cur} />
+            <StatementRows title="Income" lines={p.lines.filter((l) => l.type === 'income').map((l) => ({ code: l.code, name: l.name, amount: l.amountMinor }))} totalLabel="Total income" total={BigInt(p.incomeMinor)} cur={cur} linkFor={(code, name) => entriesLink({ account: code, from: range.from, to: range.to, label: `${code} ${name}` })} totalLink={entriesLink({ type: 'income', from: range.from, to: range.to, label: 'Income' })} />
+            <StatementRows title="Expenses" lines={p.lines.filter((l) => l.type === 'expense').map((l) => ({ code: l.code, name: l.name, amount: l.amountMinor }))} totalLabel="Total expenses" total={BigInt(p.expenseMinor)} cur={cur} linkFor={(code, name) => entriesLink({ account: code, from: range.from, to: range.to, label: `${code} ${name}` })} totalLink={entriesLink({ type: 'expense', from: range.from, to: range.to, label: 'Expenses' })} />
             <tr className="grand"><td>Net profit</td><td className="num">{fmt(p.netMinor, { symbol: false, paren: true })}</td></tr>
           </tbody>
         </table>
@@ -1329,8 +1451,8 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
             {p.groups.map((g) => (
               <tr className="line" key={g.key ?? 'none'} style={{ fontWeight: 400 }}>
                 <td style={{ paddingLeft: 0 }}>{g.key ? g.key : 'Unattributed'}</td>
-                <td className="num">{fmt(g.incomeMinor, { symbol: false })}</td>
-                <td className="num">{fmt(g.expenseMinor, { symbol: false })}</td>
+                <td className="num"><a {...nav.linkProps(entriesLink({ type: 'income', from: range.from, to: range.to, groupBy, groupKey: g.key, label: `Income · ${groupBy} ${g.key ?? 'unattributed'}` }))}>{fmt(g.incomeMinor, { symbol: false })}</a></td>
+                <td className="num"><a {...nav.linkProps(entriesLink({ type: 'expense', from: range.from, to: range.to, groupBy, groupKey: g.key, label: `Expenses · ${groupBy} ${g.key ?? 'unattributed'}` }))}>{fmt(g.expenseMinor, { symbol: false })}</a></td>
                 <td className="num">{fmt(g.netMinor, { symbol: false, paren: true })}</td>
               </tr>
             ))}
@@ -1356,10 +1478,10 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
         <table className="ai3-stmt">
           <thead><tr><th></th><th>{cur}</th></tr></thead>
           <tbody>
-            <StatementRows title="Assets" lines={b.assets.lines.map((l) => ({ code: l.code, name: l.name, amount: l.balanceMinor }))} totalLabel="Total assets" total={BigInt(b.assets.totalMinor)} cur={cur} />
-            <StatementRows title="Liabilities" lines={b.liabilities.lines.map((l) => ({ code: l.code, name: l.name, amount: l.balanceMinor }))} totalLabel="Total liabilities" total={BigInt(b.liabilities.totalMinor)} cur={cur} />
+            <StatementRows title="Assets" lines={b.assets.lines.map((l) => ({ code: l.code, name: l.name, amount: l.balanceMinor }))} totalLabel="Total assets" total={BigInt(b.assets.totalMinor)} cur={cur} linkFor={(code, name) => entriesLink({ account: code, to: asOfIso, label: `${code} ${name}` })} totalLink={entriesLink({ type: 'asset', to: asOfIso, label: 'Assets' })} />
+            <StatementRows title="Liabilities" lines={b.liabilities.lines.map((l) => ({ code: l.code, name: l.name, amount: l.balanceMinor }))} totalLabel="Total liabilities" total={BigInt(b.liabilities.totalMinor)} cur={cur} linkFor={(code, name) => entriesLink({ account: code, to: asOfIso, label: `${code} ${name}` })} totalLink={entriesLink({ type: 'liability', to: asOfIso, label: 'Liabilities' })} />
             <tr className="grand"><td>Net assets</td><td className="num">{fmt(BigInt(b.assets.totalMinor) - BigInt(b.liabilities.totalMinor), { symbol: false, paren: true })}</td></tr>
-            <StatementRows title="Equity" lines={b.equity.lines.map((l) => ({ code: l.code, name: l.name, amount: l.balanceMinor }))} totalLabel="Total equity" total={BigInt(b.equity.totalMinor)} cur={cur} />
+            <StatementRows title="Equity" lines={b.equity.lines.map((l) => ({ code: l.code, name: l.name, amount: l.balanceMinor }))} totalLabel="Total equity" total={BigInt(b.equity.totalMinor)} cur={cur} linkFor={(code, name) => (code.endsWith('.current') ? `/ledger?tab=statements` : entriesLink({ account: code, to: asOfIso, label: `${code} ${name}` }))} />
           </tbody>
         </table>
       )}
@@ -1374,7 +1496,7 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
 
   return (
     <>
-      <Header crumb="Statements" title={balanceFirst ? 'Balance sheet' : 'Profit and loss'} sub={company?.name} />
+      <Header crumb="Statements" title={trialFirst ? 'Trial balance' : balanceFirst ? 'Balance sheet' : 'Profit and loss'} sub={company?.name} />
       <Failure error={periods.error ?? pnl.error ?? sheet.error} />
       <div className="ai3-card" style={{ marginBottom: 14 }}>
         <div className="ai3-report-bar">
@@ -1401,10 +1523,10 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
               <option value="goal">Goal</option>
             </select>
           </Field>
-          <Field label="Balance sheet date"><input className="ai3-input" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
+          <Field label="Balance sheet and trial balance date"><input className="ai3-input" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
         </div>
       </div>
-      {balanceFirst ? <>{sheetCard}{pnlCard}</> : <>{pnlCard}{sheetCard}</>}
+      {trialFirst ? <><TrialBalanceCard companyId={companyId} company={company} asOf={asOf} />{sheetCard}{pnlCard}</> : balanceFirst ? <>{sheetCard}{pnlCard}<TrialBalanceCard companyId={companyId} company={company} asOf={asOf} /></> : <>{pnlCard}{sheetCard}<TrialBalanceCard companyId={companyId} company={company} asOf={asOf} /></>}
       <div className="ai3-card">
         <h3>Periods</h3>
         {list.length === 0 ? (
@@ -1441,7 +1563,9 @@ interface BankAccount {
   ledgerBalanceMinor: string; statementBalanceMinor: string | null; lastLineAt: string | null; unreconciled: number;
   lastRun: { at: string | null; autoPosted: number; leftForReview: number; linesSeen: number } | null;
 }
-interface Institution { id: string; name: string; kind: string; provider: string; connectionType: string; popular?: boolean }
+interface Institution { id: string; name: string; kind: string; provider: string; connectionType: string; popular?: boolean; network?: string; exchange?: string }
+interface ExchangeInfo { id: string; name: string; fields: Array<{ key: 'apiKey' | 'secret' | 'passphrase'; label: string; secret: boolean; help?: string }>; currencies: string[]; note: string }
+interface ConnectedWallet { id: string; kind: 'address' | 'exchange'; label: string; network: string | null; address: string | null; exchange: string | null; currency: string; bankAccountId: string | null; lastSyncAt: string | null; lastError: string | null; balanceMinor: string | null; explorer: string | null; chainName: string | null; symbol: string | null; proof: unknown }
 interface Proposal {
   kind: 'match' | 'batch' | 'create' | 'transfer' | 'ask'; confidence: number; reason: string; transactionIds?: string[]; accountCode?: string; contactName?: string;
   otherBankAccountId?: string; otherLineId?: string; invoiceId?: string; options?: Array<{ label: string; decision: Record<string, unknown> }>;
@@ -1461,6 +1585,138 @@ const ACCOUNT_CHOICES: Array<{ code: string; name: string; dir: 'in' | 'out' | '
   { code: '3000', name: 'Contributed funds (owner funding)', dir: 'in' },
   { code: '2000', name: 'Payables', dir: 'any' },
 ];
+
+
+// ---------------------------------------------------------------------------
+// Connected wallets: an address watched on a chain, or an exchange read by key
+// ---------------------------------------------------------------------------
+
+const SINCE_OPTIONS = [{ v: '0', l: 'From now' }, { v: '7', l: 'Last 7 days' }, { v: '30', l: 'Last 30 days' }];
+
+function WalletPicker({ onPick, disabled }: { onPick: (w: DiscoveredWallet) => void; disabled?: boolean }) {
+  const [wallets, setWallets] = useState<DiscoveredWallet[] | null>(null);
+  useEffect(() => { void discoverWallets().then(setWallets); }, []);
+  if (wallets === null) return <span className="ai3-note">Looking for wallets in this browser…</span>;
+  if (wallets.length === 0) return <span className="ai3-note">No wallet extension found in this browser. Paste the address instead, or install MetaMask, Rabby or Coinbase Wallet. A hardware wallet connects through one of those.</span>;
+  return (
+    <div className="ai3-actions">
+      {wallets.map((w) => (
+        <button key={w.uuid} className="ai3-btn" disabled={disabled} onClick={() => onPick(w)}>
+          {w.icon ? <img src={w.icon} alt="" style={{ width: 16, height: 16 }} /> : null}{w.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ConnectWalletForm({ companyId, institution, onDone, onBack }: { companyId: string; institution: Institution; onDone: () => void; onBack: () => void }) {
+  const chains = usePluginData<{ chains: ChainInfo[] }>('chains', { companyId });
+  const chain = chains.data?.chains.find((c) => c.slug === institution.network) ?? null;
+  const connect = usePluginAction('wallet.connect');
+  const toast = usePluginToast();
+  const { run, busy } = useRun([]);
+  const [address, setAddress] = useState('');
+  const [label, setLabel] = useState('');
+  const [since, setSince] = useState('0');
+  const [picked, setPicked] = useState<DiscoveredWallet | null>(null);
+  const [proof, setProof] = useState<{ message: string; signature: string } | null>(null);
+  const valid = /^0x[0-9a-fA-F]{40}$/.test(address.trim());
+  const ownership = usePluginData<{ message: string; at: string }>('ownership-message', { companyId, address: valid ? address.trim() : '' });
+  async function pickWallet(w: DiscoveredWallet) {
+    try {
+      const a = await connectWallet(w.provider);
+      setPicked(w);
+      setAddress(a);
+      setProof(null);
+    } catch (err) {
+      toast({ title: 'Wallet not connected', body: err instanceof Error ? err.message : String(err), tone: 'error' });
+    }
+  }
+  async function sign() {
+    if (!picked || !ownership.data) return;
+    try {
+      const signature = await signMessage(picked.provider, address.trim(), ownership.data.message);
+      setProof({ message: ownership.data.message, signature });
+      toast({ title: 'Ownership signed', body: 'The signature is kept with the wallet as proof it is yours.', tone: 'success' });
+    } catch (err) {
+      toast({ title: 'Not signed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
+    }
+  }
+  async function save() {
+    const ok = await run(async () => {
+      const r = (await connect({ companyId, label: label.trim() || null, network: institution.network, address: address.trim(), proof, sinceDays: Number(since) })) as { label: string; proven: boolean };
+      toast({ title: `${r.label} connected`, body: `${chain?.token.symbol ?? 'Token'} transfers in and out land in its bank account within five minutes.${r.proven ? ' Ownership proven by signature.' : ''}`, tone: 'success', ttlMs: 8000 });
+    }, 'Wallet connected');
+    if (ok) onDone();
+  }
+  return (
+    <>
+      <p className="ai3-note" style={{ marginTop: 0 }}><strong>{institution.name}</strong> · watched by address on {chain?.name ?? institution.network}{chain?.testnet ? ' (testnet)' : ''}. <a href="#" onClick={(e) => { e.preventDefault(); onBack(); }}>Choose another</a></p>
+      <div style={{ marginBottom: 10 }}>
+        <div className="ai3-cap" style={{ marginBottom: 6 }}>Connect a wallet in this browser, or paste the address. Hot and hardware wallets are the same to the ledger: an address it reads.</div>
+        <WalletPicker onPick={pickWallet} disabled={busy} />
+      </div>
+      <div className="ai3-form-row">
+        <Field label="Address" style={{ gridColumn: 'span 2' }}><input className="ai3-input" value={address} onChange={(e) => { setAddress(e.target.value); setProof(null); }} placeholder="0x…" spellCheck={false} /></Field>
+        <Field label="Label"><input className="ai3-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={valid ? `${chain?.name ?? ''} wallet ${short(address.trim())}` : 'Treasury wallet'} /></Field>
+        <Field label="Read history">
+          <select className="ai3-select" value={since} onChange={(e) => setSince(e.target.value)}>{SINCE_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
+        </Field>
+      </div>
+      <div className="ai3-actions">
+        <button className="ai3-btn primary" disabled={busy || !valid} onClick={save}>Connect wallet</button>
+        {picked && valid && !proof && <button className="ai3-btn" disabled={busy || !ownership.data} onClick={sign}>Sign to prove it is yours</button>}
+        {proof && <span className="ai3-badge paid">Ownership signed</span>}
+      </div>
+      <p className="ai3-note">Only the address is stored{proof ? ', with the signature' : ''}. The ledger never holds this wallet's key; paying from it happens in your wallet, when you click Pay on an invoice.</p>
+    </>
+  );
+}
+
+function ConnectExchangeForm({ companyId, institution, onDone, onBack }: { companyId: string; institution: Institution; onDone: () => void; onBack: () => void }) {
+  const info = usePluginData<{ exchanges: ExchangeInfo[] }>('chains', { companyId });
+  const ex = info.data?.exchanges.find((e) => e.id === institution.exchange) ?? null;
+  const connect = usePluginAction('wallet.exchange');
+  const toast = usePluginToast();
+  const { run, busy } = useRun([]);
+  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [currency, setCurrency] = useState('');
+  const [label, setLabel] = useState('');
+  const [since, setSince] = useState('30');
+  const cur = currency || ex?.currencies[0] || 'USD';
+  const complete = Boolean(ex) && ex!.fields.every((f) => f.key === 'passphrase' || (creds[f.key] ?? '').trim());
+  async function save() {
+    const ok = await run(async () => {
+      const r = (await connect({ companyId, label: label.trim() || null, exchange: institution.exchange, apiKey: creds['apiKey'] ?? '', secret: creds['secret'] ?? '', passphrase: creds['passphrase'] ?? null, currency: cur, sinceDays: Number(since) })) as { label: string; detail: string };
+      toast({ title: `${r.label} connected`, body: `${ex?.name ?? 'The exchange'} accepted the key (${r.detail}). Its ${cur} ledger is read every five minutes.`, tone: 'success', ttlMs: 8000 });
+    }, 'Exchange connected');
+    if (ok) onDone();
+  }
+  return (
+    <>
+      <p className="ai3-note" style={{ marginTop: 0 }}><strong>{institution.name}</strong> · read with an API key. <a href="#" onClick={(e) => { e.preventDefault(); onBack(); }}>Choose another</a></p>
+      {ex && <p className="ai3-note" style={{ marginTop: 0 }}>{ex.note} The ledger only reads; a key that can trade or withdraw is more than it needs.</p>}
+      <div className="ai3-form-row">
+        {(ex?.fields ?? []).map((f) => (
+          <Field key={f.key} label={f.label} {...(f.secret ? { style: { gridColumn: 'span 2' } } : {})}>
+            {f.secret ? <textarea className="ai3-input" rows={3} value={creds[f.key] ?? ''} onChange={(e) => setCreds({ ...creds, [f.key]: e.target.value })} placeholder={f.help ?? ''} spellCheck={false} /> : <input className="ai3-input" value={creds[f.key] ?? ''} onChange={(e) => setCreds({ ...creds, [f.key]: e.target.value })} placeholder={f.help ?? ''} spellCheck={false} />}
+          </Field>
+        ))}
+        <Field label="Currency to read">
+          <select className="ai3-select" value={cur} onChange={(e) => setCurrency(e.target.value)}>{(ex?.currencies ?? ['USD']).map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        </Field>
+        <Field label="Label"><input className="ai3-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={`${ex?.name ?? institution.name} · ${cur}`} /></Field>
+        <Field label="Read history">
+          <select className="ai3-select" value={since} onChange={(e) => setSince(e.target.value)}>{[{ v: '7', l: 'Last 7 days' }, { v: '30', l: 'Last 30 days' }, { v: '90', l: 'Last 90 days' }, { v: '365', l: 'Last year' }].map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
+        </Field>
+      </div>
+      <div className="ai3-actions">
+        <button className="ai3-btn primary" disabled={busy || !complete} onClick={save}>{busy ? 'Checking the key…' : 'Connect exchange'}</button>
+      </div>
+      <p className="ai3-note">One account per currency: add {ex?.name ?? 'the exchange'} again for another currency. Credentials are sealed in this company's database; use a read-only key all the same.</p>
+    </>
+  );
+}
 
 function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; onDone: () => void; onCancel: () => void }) {
   const [query, setQuery] = useState('');
@@ -1492,7 +1748,7 @@ function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; on
       </div>
       {!manual && !picked && (
         <>
-          <p className="ai3-note" style={{ marginTop: 0 }}>Search for banks, cards and payment providers. Feeds come through Plaid in the US and TrueLayer or GoCardless in the UK and Europe; Stripe connects with a restricted key.</p>
+          <p className="ai3-note" style={{ marginTop: 0 }}>Search for banks, cards, payment providers, wallets and exchanges. Bank feeds come through Plaid in the US and TrueLayer or GoCardless in the UK and Europe; Stripe connects with a restricted key; a wallet is watched by its address; an exchange is read with a read-only API key.</p>
           <div className="ai3-form-row">
             <Field label="Search" style={{ gridColumn: 'span 2' }}><input className="ai3-input" autoFocus placeholder="Mercury, Monzo, Stripe…" value={query} onChange={(e) => setQuery(e.target.value)} /></Field>
             <Field label="Country">
@@ -1506,13 +1762,15 @@ function AddBankAccount({ companyId, onDone, onCancel }: { companyId: string; on
             {list.map((i) => (
               <button key={i.id} className="ai3-card" style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit' }} onClick={() => { setPicked(i); setName(i.name); }}>
                 <div style={{ fontWeight: 600 }}>{i.name}</div>
-                <div className="ai3-cap">{KIND_LABEL[i.kind] ?? i.kind} · {i.connectionType}{i.provider !== 'upload' && i.provider !== 'stripe' ? ` via ${i.provider}` : ''}</div>
+                <div className="ai3-cap">{KIND_LABEL[i.kind] ?? i.kind} · {i.connectionType}{!['upload', 'stripe', 'chain', 'exchange'].includes(i.provider) ? ` via ${i.provider}` : ''}</div>
               </button>
             ))}
           </div>
         </>
       )}
-      {(manual || picked) && (
+      {picked && picked.provider === 'chain' && <ConnectWalletForm companyId={companyId} institution={picked} onDone={onDone} onBack={() => setPicked(null)} />}
+      {picked && picked.provider === 'exchange' && <ConnectExchangeForm companyId={companyId} institution={picked} onDone={onDone} onBack={() => setPicked(null)} />}
+      {(manual || (picked && picked.provider !== 'chain' && picked.provider !== 'exchange')) && (
         <>
           {picked && <p className="ai3-note" style={{ marginTop: 0 }}><strong>{picked.name}</strong> · {picked.connectionType}{picked.provider !== 'upload' && picked.provider !== 'stripe' ? ` via ${picked.provider}` : ''}. <a href="#" onClick={(e) => { e.preventDefault(); setPicked(null); }}>Choose another</a></p>}
           <div className="ai3-form-row">
@@ -1591,6 +1849,12 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
   const nav = useHostNavigation();
   const location = useHostLocation();
   const banks = usePluginData<{ accounts: BankAccount[] }>('bank-accounts', { companyId });
+  const connected = usePluginData<{ wallets: ConnectedWallet[] }>('connected-wallets', { companyId });
+  const feedSync = usePluginAction('feed.sync');
+  const disconnect = usePluginAction('wallet.disconnect');
+  const toast = usePluginToast();
+  const { run: runFeed, busy: feedBusy } = useRun([banks.refresh, connected.refresh]);
+  const walletFor = (bankId: string) => (connected.data?.wallets ?? []).find((w) => w.bankAccountId === bankId) ?? null;
   const [adding, setAdding] = useState(new URLSearchParams(location.search).get('add') === '1');
   const [uploading, setUploading] = useState<string | null>(null);
   const cur = company?.currency ?? 'USD';
@@ -1610,7 +1874,7 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
         }
       />
       <Failure error={banks.error} />
-      {adding && <AddBankAccount companyId={companyId} onDone={() => { setAdding(false); banks.refresh(); }} onCancel={() => setAdding(false)} />}
+      {adding && <AddBankAccount companyId={companyId} onDone={() => { setAdding(false); banks.refresh(); connected.refresh(); }} onCancel={() => setAdding(false)} />}
       {uploading && <UploadStatement companyId={companyId} accounts={accounts} preselect={uploading} onDone={(id) => { setUploading(null); banks.refresh(); nav.navigate(`/ledger?tab=reconcile&account=${id}`); }} />}
       {accounts.length === 0 && !adding ? (
         <div className="ai3-card"><div className="ai3-empty">No bank accounts yet. Add one, then upload its statement or connect a feed. Stripe counts as a bank account.</div></div>
@@ -1623,7 +1887,7 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
             return (
               <div className="ai3-card" key={a.id}>
                 <div className="ai3-toolbar" style={{ marginBottom: 6 }}>
-                  <h3 style={{ margin: 0 }}>{a.name} <span className={`ai3-badge ${a.feed === 'upload' ? 'draft' : 'issued'}`}>{a.feed === 'upload' ? 'upload' : a.feed === 'stripe' ? 'Stripe feed' : 'feed pending'}</span></h3>
+                  <h3 style={{ margin: 0 }}>{a.name} <span className={`ai3-badge ${a.feed === 'upload' ? 'draft' : walletFor(a.id)?.lastError ? 'bad' : 'issued'}`}>{a.feed === 'upload' ? 'upload' : a.feed === 'stripe' ? 'Stripe feed' : a.feed === 'chain' || a.feed === 'tempo' ? 'on-chain feed' : a.feed === 'exchange' ? 'exchange feed' : 'feed pending'}</span></h3>
                   <span className="ai3-cap">{KIND_LABEL[a.kind] ?? a.kind} · {a.accountCode}</span>
                 </div>
                 <div className="ai3-pair">
@@ -1632,6 +1896,12 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
                 </div>
                 {diff !== null && diff !== 0n && <div className="ai3-cap" style={{ marginTop: 6 }}>Difference {fmt(diff, { currency: a.currency })}{a.unreconciled ? `, ${a.unreconciled} line${a.unreconciled === 1 ? '' : 's'} not yet reconciled` : ''}</div>}
                 {a.lastRun && <div className="ai3-cap" style={{ marginTop: 4 }}>Last run {dateLong(a.lastRun.at)}: {a.lastRun.autoPosted} posted automatically, {a.lastRun.leftForReview} left for you.</div>}
+                {(() => { const w = walletFor(a.id); if (!w) return null; return (
+                  <div className="ai3-cap" style={{ marginTop: 4, wordBreak: 'break-all' }}>
+                    {w.kind === 'address' ? <>{w.chainName} · {w.explorer ? <a href={w.explorer} target="_blank" rel="noreferrer">{w.address}</a> : w.address}{w.balanceMinor !== null ? ` · on chain ${fmt(w.balanceMinor, { symbol: false })} ${w.symbol}` : ''}{w.proof ? ' · ownership signed' : ''}</> : <>{w.chainName} · {w.currency} · read-only key</>}
+                    {w.lastError ? <span className="red"> · last read failed: {w.lastError}</span> : w.lastSyncAt ? ` · read ${dateLong(w.lastSyncAt)}` : ''}
+                  </div>
+                ); })()}
                 <div className="ai3-actions" style={{ marginTop: 12 }}>
                   {a.unreconciled > 0 ? (
                     <a className="ai3-btn primary" {...nav.linkProps(`/ledger?tab=reconcile&account=${a.id}`)}>Reconcile {a.unreconciled} item{a.unreconciled === 1 ? '' : 's'}</a>
@@ -1641,6 +1911,12 @@ function BanksTab({ companyId, company }: { companyId: string; company: Company 
                     <a className="ai3-btn" {...nav.linkProps(`/ledger?tab=reconcile&account=${a.id}`)}>All reconciled · view</a>
                   )}
                   {stmt !== null && <button className="ai3-btn" onClick={() => setUploading(a.id)}>Upload</button>}
+                  {(() => { const w = walletFor(a.id); if (!w) return null; return (
+                    <>
+                      <button className="ai3-btn" disabled={feedBusy} onClick={() => runFeed(async () => { const r = (await feedSync({ companyId, walletId: w.id })) as { imported: number; autoPosted: number; leftForReview: number; error: string | null }; if (r.error) throw new Error(r.error); toast({ title: `${w.label} read`, body: `${r.imported} new line(s), ${r.autoPosted} posted, ${r.leftForReview} to review.`, tone: 'success' }); }, `${w.label} read`)}>Read now</button>
+                      <button className="ai3-btn danger" disabled={feedBusy} onClick={() => { if (window.confirm(`Stop watching ${w.label}? Its lines stay in the books; the account is archived.`)) void runFeed(() => disconnect({ companyId, walletId: w.id }), `${w.label} disconnected`); }}>Disconnect</button>
+                    </>
+                  ); })()}
                 </div>
               </div>
             );
@@ -1801,8 +2077,109 @@ function ReconcileTab({ companyId, company }: { companyId: string; company: Comp
 // Page + sidebar
 // ---------------------------------------------------------------------------
 
-const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'statements', 'settings'] as const;
+const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'bills', 'journals', 'statements', 'import', 'settings'] as const;
 type Tab = (typeof TABS)[number];
+
+
+// ---------------------------------------------------------------------------
+// Paying an invoice by its link: from the company wallet, or from the person's own wallet
+// ---------------------------------------------------------------------------
+
+interface RemoteInvoiceView {
+  invoice: { number: string; currency: string; totalMinor: string; outstandingMinor: string; status: string; dueAt: string | null; company: { name: string }; url: string; lines: Array<{ description: string; amountMinor: string }> };
+  options: Array<{ chain: ChainInfo; address: string; label: string; asset: string; memo: string | null; companyWallet: boolean }>;
+}
+
+function PayInvoiceCard({ companyId, url, onClose }: { companyId: string; url: string; onClose: () => void }) {
+  const remote = usePluginData<RemoteInvoiceView>('remote-invoice', { companyId, url });
+  const wallet = usePluginData<{ wallet: WalletInfo | null }>('wallet', { companyId });
+  const payCompany = usePluginAction('invoice.pay');
+  const book = usePluginAction('invoice.pay-book');
+  const toast = usePluginToast();
+  const { run, busy } = useRun([remote.refresh, wallet.refresh]);
+  const [amount, setAmount] = useState('');
+  const [accountCode, setAccountCode] = useState('');
+  const [choosing, setChoosing] = useState<number | null>(null);
+  const [stage, setStage] = useState<string | null>(null);
+  const [done, setDone] = useState<{ txHash: string; explorer: string; how: string } | null>(null);
+  const inv = remote.data?.invoice;
+  const open = inv ? inv.status === 'issued' || inv.status === 'part_paid' : false;
+  const amountMinor = inv ? (AMOUNT.test(amount.replace(/,/g, '')) ? toMinor(amount.replace(/,/g, '')) : inv.outstandingMinor) : '0';
+  async function fromCompany() {
+    await run(async () => {
+      const r = (await payCompany({ companyId, invoiceUrl: url, amountMinor, accountCode: accountCode.trim() || null })) as { txHash: string; explorer: string; amountMinor: string; asset: string };
+      setDone({ txHash: r.txHash, explorer: r.explorer, how: `${fmt(r.amountMinor, { symbol: false })} ${r.asset} from the company wallet` });
+    }, 'Paid from the company wallet');
+  }
+  async function fromMine(optionIndex: number, w: DiscoveredWallet) {
+    const option = remote.data?.options[optionIndex];
+    if (!option || !inv) return;
+    setChoosing(null);
+    try {
+      setStage('Connecting to your wallet…');
+      const from = await connectWallet(w.provider);
+      setStage(`Confirm in ${w.name}: ${fmt(amountMinor, { symbol: false })} ${option.asset} to ${short(option.address)} on ${option.chain.name}`);
+      const txHash = await sendToken(w.provider, { from, chain: option.chain, to: option.address, amountMinor: BigInt(amountMinor), memo: option.memo });
+      setStage('Sent. Waiting for the chain to confirm…');
+      const receipt = await waitForReceipt(w.provider, txHash);
+      if (receipt.status !== 'success') throw new WalletError('The transaction reverted on chain; nothing was paid.');
+      setStage('Confirmed. Booking it…');
+      const r = (await book({ companyId, network: option.chain.slug, txHash, from, to: option.address, amountMinor, invoiceUrl: url, accountCode: accountCode.trim() || null })) as { explorer: string; walletLabel: string; booked: { kind: string; accountCode: string | null } };
+      setDone({ txHash, explorer: r.explorer, how: `${fmt(amountMinor, { symbol: false })} ${option.asset} from ${r.walletLabel}` });
+      toast({ title: `Paid ${inv.number}`, body: `Booked ${r.booked.kind === 'bill' ? 'against the bill' : `to ${r.booked.accountCode ?? 'expenses'}`} from ${r.walletLabel}; the wallet feed will match the chain line by hash.`, tone: 'success', ttlMs: 9000 });
+      remote.refresh();
+    } catch (err) {
+      toast({ title: 'Not paid', body: err instanceof Error ? err.message : String(err), tone: 'error', ttlMs: 9000 });
+    } finally {
+      setStage(null);
+    }
+  }
+  return (
+    <div className="ai3-card" style={{ marginBottom: 14, borderLeft: '4px solid var(--ai3-blue)' }}>
+      <div className="ai3-toolbar">
+        <h3 style={{ margin: 0 }}>Pay an invoice <span className="ctx">{inv ? `${inv.number} from ${inv.company.name}` : url}</span></h3>
+        <button className="ai3-btn small" onClick={onClose}>Close</button>
+      </div>
+      <Failure error={remote.error} />
+      {inv && (
+        <>
+          <div className="ai3-pair" style={{ marginBottom: 10 }}>
+            <div><div className="ai3-big" style={{ fontSize: 20 }}>{fmt(inv.outstandingMinor, { currency: inv.currency })}</div><div className="ai3-cap">{open ? `Amount due${inv.dueAt ? ` by ${dateLong(inv.dueAt)}` : ''}` : `This invoice is ${statusLabel(inv.status)}`}</div></div>
+            <div><div className="ai3-big" style={{ fontSize: 20 }}>{fmt(inv.totalMinor, { currency: inv.currency })}</div><div className="ai3-cap">Total · <a href={inv.url} target="_blank" rel="noreferrer">open the invoice</a></div></div>
+          </div>
+          {done ? (
+            <div className="ai3-prop" style={{ marginBottom: 8 }}>
+              <div className="ai3-prop-kind"><span>Paid</span></div>
+              <div>{done.how}. Transaction <a href={done.explorer} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{done.txHash}</a>.</div>
+            </div>
+          ) : open && remote.data!.options.length === 0 ? (
+            <p className="ai3-note" style={{ marginTop: 0 }}>This invoice offers no wallet the ledger can pay on (Tempo, Base or Ethereum stablecoins). Pay it the way the invoice says and record the payment on its bill.</p>
+          ) : open ? (
+            <>
+              <div className="ai3-form-row" style={{ marginBottom: 8 }}>
+                <Field label={`Amount to pay (${inv.currency})`}><input className="ai3-input" placeholder={fmt(inv.outstandingMinor, { symbol: false })} value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} /></Field>
+                <Field label="Book to (account code, optional)"><input className="ai3-input" placeholder="5900 Other operating" value={accountCode} onChange={(e) => setAccountCode(e.target.value)} /></Field>
+              </div>
+              {remote.data!.options.map((o, i) => (
+                <div key={i} className="ai3-line" style={{ marginBottom: 8 }}>
+                  <div style={{ fontWeight: 600 }}>{o.asset} on {o.chain.name}{o.chain.testnet ? ' (testnet)' : ''}</div>
+                  <div className="ai3-cap" style={{ wordBreak: 'break-all' }}>To {o.address}{o.memo ? ` · memo ${o.memo}` : ''}</div>
+                  <div className="ai3-actions" style={{ marginTop: 8 }}>
+                    {o.companyWallet && <button className="ai3-btn primary" disabled={busy || stage !== null} onClick={fromCompany}>Pay from company wallet{wallet.data?.wallet?.balanceMinor ? ` (${fmt(wallet.data.wallet.balanceMinor, { symbol: false })} ${wallet.data.wallet.asset} there)` : ''}</button>}
+                    <button className="ai3-btn" disabled={busy || stage !== null} onClick={() => setChoosing(choosing === i ? null : i)}>Pay from my wallet</button>
+                  </div>
+                  {choosing === i && <div style={{ marginTop: 8 }}><WalletPicker onPick={(w) => fromMine(i, w)} disabled={stage !== null} /></div>}
+                </div>
+              ))}
+              {stage && <div className="ai3-note"><Spinner /> {stage}</div>}
+              <p className="ai3-note">From the company wallet, the ledger signs and books it here. From your own wallet, your wallet signs; once the chain confirms, the payment is booked against that wallet, which is connected as a bank account if it is new.</p>
+            </>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
 
 function tabFromSearch(search: string): Tab {
   const t = new URLSearchParams(search).get('tab');
@@ -1816,10 +2193,13 @@ export function LedgerPage(_props: PluginPageProps) {
   const tab = tabFromSearch(location.search);
   const companyId = context.companyId;
   const company = usePluginData<Company>('company', companyId ? { companyId } : {});
+  const nav = useHostNavigation();
+  const payUrl = new URLSearchParams(location.search).get('pay');
   if (!companyId) return <div className="ai3">Pick a company to see its ledger.</div>;
   return (
     <ErrorBoundary>
       <div className="ai3">
+        {payUrl && /^https:\/\/[^\s/]+\/i\/[A-Za-z0-9_-]{16,80}$/.test(payUrl) && <PayInvoiceCard companyId={companyId} url={payUrl} onClose={() => { const q = new URLSearchParams(location.search); q.delete('pay'); nav.navigate(`/ledger${q.toString() ? `?${q.toString()}` : ''}`, { replace: true }); }} />}
         {tab === 'position' && <PositionTab companyId={companyId} company={company.data} />}
         {tab === 'transactions' && <TransactionsTab companyId={companyId} company={company.data} />}
         {tab === 'invoices' && <InvoicesTab companyId={companyId} company={company.data} />}
@@ -1827,6 +2207,9 @@ export function LedgerPage(_props: PluginPageProps) {
         {tab === 'banks' && <BanksTab companyId={companyId} company={company.data} />}
         {tab === 'reconcile' && <ReconcileTab companyId={companyId} company={company.data} />}
         {tab === 'settings' && <SettingsTab companyId={companyId} company={company.data} />}
+        {tab === 'bills' && <BillsTab companyId={companyId} company={company.data} />}
+        {tab === 'journals' && <JournalsTab companyId={companyId} company={company.data} />}
+        {tab === 'import' && <ImportTab companyId={companyId} company={company.data} />}
         <p className="ai3-note" style={{ marginTop: 28 }}>AI3 Ledger · double-entry, append-only, integer minor units. Costs come from Paperclip; nothing is re-derived.</p>
       </div>
     </ErrorBoundary>
@@ -1854,8 +2237,12 @@ const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, se
   { label: 'Bank accounts', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && ['banks', 'reconcile'].includes(new URLSearchParams(s).get('tab') ?? '') },
   { label: 'Transactions', to: '/ledger?tab=transactions', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'transactions' },
   { label: 'Invoices', to: '/ledger?tab=invoices', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'invoices' },
-  { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') },
+  { label: 'Bills', to: '/ledger?tab=bills', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'bills' },
+  { label: 'Journals', to: '/ledger?tab=journals', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'journals' },
+  { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') && !s.includes('view=trial') },
   { label: 'Balance sheet', to: '/ledger?tab=statements&view=balance', match: (p, s) => p.endsWith('/ledger') && s.includes('view=balance') },
+  { label: 'Trial balance', to: '/ledger?tab=statements&view=trial', match: (p, s) => p.endsWith('/ledger') && s.includes('view=trial') },
+  { label: 'Import', to: '/ledger?tab=import', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'import' },
   { label: 'Costs', to: '/costs', match: (p) => p.endsWith('/costs') },
   { label: 'Settings', to: '/company/settings/finance', match: (p) => p.endsWith('/company/settings/finance') },
 ];

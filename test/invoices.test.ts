@@ -184,6 +184,6 @@ describe('voiding an issued invoice', () => {
     const paid = await createInvoice(db, CO, { customerId, currency: 'USD', lines: [{ description: 'Paid', quantity: '1', unitAmountMinor: '1000' }] });
     await issueInvoice(db, CO, paid.id, {});
     await recordPayment(db, CO, paid.id, { amountMinor: 500n, reference: 'p1' });
-    await expect(voidInvoice(db, CO, paid.id)).rejects.toThrow(/part_paid; only a draft or an unpaid issued invoice/);
+    await expect(voidInvoice(db, CO, paid.id)).rejects.toThrow(/payments on it/);
   });
 });

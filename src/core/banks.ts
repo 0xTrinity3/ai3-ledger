@@ -14,7 +14,7 @@ import { assertCurrency, fromMinor, newId, table, toIso, toMinor, type LedgerDb,
 import type { ParsedLine } from './statements.js';
 
 export type BankKind = 'bank' | 'card' | 'stripe' | 'wallet';
-export type BankFeed = 'upload' | 'stripe' | 'aggregator' | 'tempo';
+export type BankFeed = 'upload' | 'stripe' | 'aggregator' | 'tempo' | 'chain' | 'exchange';
 export type LineStatus = 'unreconciled' | 'matched' | 'created' | 'transferred' | 'excluded';
 
 export interface BankAccount {

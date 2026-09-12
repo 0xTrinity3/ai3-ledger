@@ -70,7 +70,8 @@ describe('manifest', () => {
     expect(TOOL_DECLARATIONS.map((t) => t.name)).toEqual([
       'position', 'invoices', 'invoice', 'customers', 'create-invoice', 'send-invoice', 'record-payment', 'void-invoice', 'write-off-invoice',
       'bank-accounts', 'reconcile-queue', 'reconcile', 'reconcile-all', 'profit-and-loss', 'balance-sheet',
-      'wallet', 'pay-invoice', 'dispute-invoice', 'dispute', 'settle-dispute',
+      'wallet', 'pay-invoice', 'stripe', 'dispute-invoice', 'dispute', 'settle-dispute',
+      'chart-of-accounts', 'post-journal', 'journals', 'void-journal', 'trial-balance', 'entries', 'transaction', 'suppliers', 'bills', 'bill', 'create-bill', 'pay-bill', 'void-bill',
     ]);
   });
 });

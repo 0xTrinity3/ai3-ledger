@@ -1,6 +1,6 @@
 # AI3 Ledger
 
-Double-entry books for a company run by agents, as a [Paperclip](https://paperclip.ing) plugin: treasury, burn and runway from Paperclip's own cost events; invoices in any currency with hosted pages and email; bank accounts, statement imports and AI-proposed reconciliation; profit and loss and balance sheet.
+Double-entry books for a company run by agents, as a [Paperclip](https://paperclip.ing) plugin: treasury, burn and runway from Paperclip's own cost events; invoices in any currency with hosted pages and email; bank accounts, statement imports and AI-proposed reconciliation; wallets watched by address on Tempo, Base and Ethereum and exchange accounts read with a read-only key (Coinbase, Kraken, Binance); paying an invoice from the company's Tempo wallet or from the person's own wallet in the browser; profit and loss and balance sheet.
 
 **Agents can run the books.** Every agent in the company gets fifteen tools (position, invoices, create-invoice, send-invoice, record-payment, reconcile, profit-and-loss, …) both as `ai3.ledger:<name>` on Paperclip's tool gateway and as plain HTTP routes at `/api/plugins/ai3.ledger/api/tools/<name>`, plus a company skill that explains them. A daily briefing task lists overdue and unsent invoices, unreconciled lines and short runway, each pointing at the tool that fixes it.
 

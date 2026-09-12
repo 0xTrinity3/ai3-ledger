@@ -10,7 +10,7 @@
  * creates the account, marks the feed as pending, and uploads work.
  */
 
-export type FeedProvider = 'plaid' | 'truelayer' | 'gocardless' | 'stripe' | 'upload';
+export type FeedProvider = 'plaid' | 'truelayer' | 'gocardless' | 'stripe' | 'upload' | 'chain' | 'exchange';
 
 export interface FeedInstitution {
   id: string;
@@ -18,8 +18,12 @@ export interface FeedInstitution {
   kind: 'bank' | 'card' | 'stripe' | 'wallet';
   countries: string[]; // ISO-3166 alpha-2; '*' for anywhere
   provider: FeedProvider;
-  connectionType: 'automatic feed' | 'API key' | 'upload';
+  connectionType: 'automatic feed' | 'API key' | 'upload' | 'wallet address';
   popular?: boolean;
+  /** chain slug for a wallet watched by address */
+  network?: string;
+  /** exchange id for an account read by API key */
+  exchange?: string;
 }
 
 export const FEED_INSTITUTIONS: FeedInstitution[] = [
@@ -60,7 +64,15 @@ export const FEED_INSTITUTIONS: FeedInstitution[] = [
   // Anywhere
   { id: 'other-bank', name: 'Another bank (upload statements)', kind: 'bank', countries: ['*'], provider: 'upload', connectionType: 'upload' },
   { id: 'other-card', name: 'A company card (upload statements)', kind: 'card', countries: ['*'], provider: 'upload', connectionType: 'upload' },
-  { id: 'wallet', name: 'A wallet (upload exports)', kind: 'wallet', countries: ['*'], provider: 'upload', connectionType: 'upload' },
+  // Wallets watched by address: hot or hardware, the ledger only needs the address
+  { id: 'wallet-tempo', name: 'Tempo wallet (pathUSD)', kind: 'wallet', countries: ['*'], provider: 'chain', connectionType: 'wallet address', network: 'tempo-moderato', popular: true },
+  { id: 'wallet-base', name: 'Base wallet (USDC)', kind: 'wallet', countries: ['*'], provider: 'chain', connectionType: 'wallet address', network: 'base', popular: true },
+  { id: 'wallet-ethereum', name: 'Ethereum wallet (USDC)', kind: 'wallet', countries: ['*'], provider: 'chain', connectionType: 'wallet address', network: 'ethereum' },
+  // Exchanges read with a read-only API key
+  { id: 'coinbase', name: 'Coinbase', kind: 'wallet', countries: ['*'], provider: 'exchange', connectionType: 'API key', exchange: 'coinbase', popular: true },
+  { id: 'kraken', name: 'Kraken', kind: 'wallet', countries: ['*'], provider: 'exchange', connectionType: 'API key', exchange: 'kraken' },
+  { id: 'binance', name: 'Binance', kind: 'wallet', countries: ['*'], provider: 'exchange', connectionType: 'API key', exchange: 'binance' },
+  { id: 'wallet', name: 'Another wallet (upload exports)', kind: 'wallet', countries: ['*'], provider: 'upload', connectionType: 'upload' },
 ];
 
 /** Search the catalogue the way Xero does: by name, filtered to a country, popular ones first when the query is empty. */

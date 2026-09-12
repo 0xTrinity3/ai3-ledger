@@ -187,3 +187,61 @@ export async function balanceSheet(db: LedgerDb, companyId: string, asOf: Date |
     differenceMinor: fromMinor(difference),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Trial balance
+// ---------------------------------------------------------------------------
+
+export interface TrialBalanceLine {
+  code: string;
+  name: string;
+  type: AccountType;
+  /** The account's net balance shown on one side only, as accountants read it. */
+  debitMinor: string;
+  creditMinor: string;
+}
+
+export interface TrialBalanceReport {
+  companyId: string;
+  currency: string | null;
+  asOf: string;
+  from: string | null;
+  lines: TrialBalanceLine[];
+  debitMinor: string;
+  creditMinor: string;
+  balances: boolean;
+  differenceMinor: string;
+}
+
+/**
+ * Every account with its net balance at a moment, debit balances in one column
+ * and credit balances in the other. The two columns must agree; the report says
+ * whether they do. Accounts with nothing in them are left out. `from` limits
+ * the window (useful for a period's movements rather than balances to date).
+ */
+export async function trialBalanceReport(db: LedgerDb, companyId: string, asOf: Date | string = new Date(), from?: Date | string): Promise<TrialBalanceReport> {
+  const at = toIso(asOf);
+  if (Number.isNaN(Date.parse(at))) throw new LedgerError('asOf must be a date', 'invalid');
+  const rows = await accountBalances(db, companyId, at, from);
+  let debit = 0n;
+  let credit = 0n;
+  const lines: TrialBalanceLine[] = [];
+  for (const r of rows) {
+    const net = r.debitMinor - r.creditMinor;
+    if (net === 0n) continue;
+    if (net > 0n) debit += net;
+    else credit += -net;
+    lines.push({ code: r.code, name: r.name, type: r.type, debitMinor: fromMinor(net > 0n ? net : 0n), creditMinor: fromMinor(net < 0n ? -net : 0n) });
+  }
+  return {
+    companyId,
+    currency: rows[0]?.currency ?? null,
+    asOf: at,
+    from: from ? toIso(from) : null,
+    lines,
+    debitMinor: fromMinor(debit),
+    creditMinor: fromMinor(credit),
+    balances: debit === credit,
+    differenceMinor: fromMinor(debit - credit),
+  };
+}

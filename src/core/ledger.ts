@@ -40,7 +40,7 @@ export class LedgerError extends Error {
 }
 
 export type Direction = 'debit' | 'credit';
-export type SourceKind = 'cost_sweep' | 'funding' | 'invoice' | 'payment' | 'manual' | 'reversal';
+export type SourceKind = 'cost_sweep' | 'funding' | 'invoice' | 'payment' | 'manual' | 'reversal' | 'journal' | 'bill' | 'conversion';
 
 export interface Subject {
   agent?: string;
@@ -546,4 +546,193 @@ function translateDbError(err: unknown): Error {
   if (/unknown account code/i.test(msg)) return new LedgerError(msg, 'unknown_account');
   if (/period .* is closed/i.test(msg)) return new LedgerError(msg, 'period_closed');
   return err instanceof Error ? err : new Error(msg);
+}
+
+// ---------------------------------------------------------------------------
+// Drill-down: the entries behind a figure, and one transaction with its source
+// ---------------------------------------------------------------------------
+
+export interface EntryFilter {
+  /** One account, or every account of a type. */
+  accountCode?: string;
+  accountType?: AccountType;
+  /** Include the sub-accounts of `accountCode` (bank accounts under Treasury). */
+  withChildren?: boolean;
+  from?: Date | string;
+  to?: Date | string;
+  /** Restrict to one subject value, as the P&L groups do. */
+  groupBy?: 'agent' | 'project' | 'goal';
+  groupKey?: string | null;
+  sourceKind?: SourceKind;
+  limit?: number;
+}
+
+export interface EntryRow {
+  entryId: string;
+  transactionId: string;
+  occurredAt: string;
+  description: string;
+  sourcePlatform: string;
+  sourceKind: SourceKind;
+  sourceRef: string | null;
+  reversesId: string | null;
+  accountCode: string;
+  accountName: string;
+  accountType: AccountType;
+  direction: Direction;
+  amountMinor: string;
+  /** Signed on the account's normal side: what this entry did to the figure the person clicked. */
+  signedMinor: string;
+  /** Running balance on the normal side, oldest first, over the rows returned. */
+  runningMinor: string;
+  currency: string;
+  subject: Subject;
+}
+
+export interface EntryList {
+  companyId: string;
+  filter: EntryFilter;
+  currency: string | null;
+  rows: EntryRow[];
+  totalMinor: string;
+  debitMinor: string;
+  creditMinor: string;
+  count: number;
+  truncated: boolean;
+}
+
+const GROUP_COL: Record<'agent' | 'project' | 'goal', string> = { agent: 'subject_agent_ref', project: 'subject_project_ref', goal: 'subject_goal_ref' };
+
+/** Posted entries matching a filter, oldest first, with a running balance. This is what a click on a report figure opens. */
+export async function listEntries(db: LedgerDb, companyId: string, filter: EntryFilter = {}): Promise<EntryList> {
+  const limit = Math.min(Math.max(Math.floor(filter.limit ?? 500), 1), 5000);
+  if (filter.groupBy && !(filter.groupBy in GROUP_COL)) throw new LedgerError('groupBy must be agent, project or goal', 'invalid');
+  const groupExpr = filter.groupBy ? `e.${GROUP_COL[filter.groupBy]}` : 'NULL::text';
+  const rows = await db.sql.query<{
+    entry_id: string; transaction_id: string; occurred_at: string; description: string; source_platform: string; source_kind: SourceKind; source_ref: string | null; reverses_id: string | null;
+    code: string; name: string; type: AccountType; direction: Direction; amount_minor: unknown; currency: string;
+    subject_agent_ref: string | null; subject_project_ref: string | null; subject_goal_ref: string | null; subject_work_ref: string | null;
+  }>(
+    `SELECT e.id AS entry_id, t.id AS transaction_id, t.occurred_at::text AS occurred_at, t.description, t.source_platform, t.source_kind, t.source_ref, t.reverses_id,
+            a.code, a.name, a.type, e.direction, e.amount_minor, e.currency,
+            e.subject_agent_ref, e.subject_project_ref, e.subject_goal_ref, e.subject_work_ref
+       FROM ${table(db, 'entries')} e
+       JOIN ${table(db, 'transactions')} t ON t.id = e.transaction_id
+       JOIN ${table(db, 'accounts')} a ON a.id = e.account_id
+       LEFT JOIN ${table(db, 'accounts')} parent ON parent.id = a.parent_id
+      WHERE t.company_id = $1 AND t.status = 'posted'
+        AND ($2::text IS NULL OR a.code = $2::text OR ($3::boolean AND parent.code = $2::text))
+        AND ($4::text IS NULL OR a.type = $4::text)
+        AND ($5::timestamptz IS NULL OR t.occurred_at >= $5::timestamptz)
+        AND ($6::timestamptz IS NULL OR t.occurred_at <= $6::timestamptz)
+        AND ($7::boolean = false OR ${groupExpr} IS NOT DISTINCT FROM $8::text)
+        AND ($9::text IS NULL OR t.source_kind = $9::text)
+      ORDER BY t.occurred_at ASC, t.created_at ASC, e.direction ASC, a.code ASC
+      LIMIT $10::int`,
+    [
+      companyId,
+      filter.accountCode ?? null,
+      filter.withChildren === true,
+      filter.accountType ?? null,
+      filter.from ? toIso(filter.from) : null,
+      filter.to ? toIso(filter.to) : null,
+      Boolean(filter.groupBy),
+      filter.groupKey ?? null,
+      filter.sourceKind ?? null,
+      limit + 1,
+    ],
+  );
+  const truncated = rows.length > limit;
+  const kept = truncated ? rows.slice(0, limit) : rows;
+  let running = 0n;
+  let debit = 0n;
+  let credit = 0n;
+  const out: EntryRow[] = kept.map((r) => {
+    const amount = toMinor(r.amount_minor);
+    const signed = normalSide(r.type) === r.direction ? amount : -amount;
+    running += signed;
+    if (r.direction === 'debit') debit += amount;
+    else credit += amount;
+    return {
+      entryId: r.entry_id,
+      transactionId: r.transaction_id,
+      occurredAt: r.occurred_at,
+      description: r.description,
+      sourcePlatform: r.source_platform,
+      sourceKind: r.source_kind,
+      sourceRef: r.source_ref,
+      reversesId: r.reverses_id,
+      accountCode: r.code,
+      accountName: r.name,
+      accountType: r.type,
+      direction: r.direction,
+      amountMinor: fromMinor(amount),
+      signedMinor: fromMinor(signed),
+      runningMinor: fromMinor(running),
+      currency: r.currency,
+      subject: {
+        ...(r.subject_agent_ref ? { agent: r.subject_agent_ref } : {}),
+        ...(r.subject_project_ref ? { project: r.subject_project_ref } : {}),
+        ...(r.subject_goal_ref ? { goal: r.subject_goal_ref } : {}),
+        ...(r.subject_work_ref ? { work: r.subject_work_ref } : {}),
+      },
+    };
+  });
+  return {
+    companyId,
+    filter,
+    currency: out[0]?.currency ?? null,
+    rows: out,
+    totalMinor: fromMinor(running),
+    debitMinor: fromMinor(debit),
+    creditMinor: fromMinor(credit),
+    count: out.length,
+    truncated,
+  };
+}
+
+/** One transaction with its lines, whatever reversed it, and whatever it reversed. */
+export async function getTransaction(db: LedgerDb, companyId: string, id: string): Promise<(TransactionRow & { status: 'pending' | 'posted'; reversedBy: string | null }) | null> {
+  const heads = await db.sql.query<{ id: string; public_id: string; occurred_at: string; description: string; source_platform: string; source_kind: SourceKind; source_ref: string | null; reverses_id: string | null; created_by: string; status: 'pending' | 'posted'; reversed_by: string | null }>(
+    `SELECT t.id, t.public_id, t.occurred_at::text AS occurred_at, t.description, t.source_platform, t.source_kind, t.source_ref, t.reverses_id, t.created_by, t.status,
+            (SELECT r.id FROM ${table(db, 'transactions')} r WHERE r.reverses_id = t.id AND r.status = 'posted' ORDER BY r.created_at DESC LIMIT 1) AS reversed_by
+       FROM ${table(db, 'transactions')} t
+      WHERE t.company_id = $1 AND t.id = $2::uuid`,
+    [companyId, id],
+  );
+  const h = heads[0];
+  if (!h) return null;
+  const lines = await db.sql.query<{ code: string; name: string; direction: Direction; amount_minor: unknown; currency: string; subject_agent_ref: string | null; subject_project_ref: string | null; subject_goal_ref: string | null; subject_work_ref: string | null }>(
+    `SELECT a.code, a.name, e.direction, e.amount_minor, e.currency, e.subject_agent_ref, e.subject_project_ref, e.subject_goal_ref, e.subject_work_ref
+       FROM ${table(db, 'entries')} e JOIN ${table(db, 'accounts')} a ON a.id = e.account_id
+      WHERE e.transaction_id = $1::uuid
+      ORDER BY e.direction, a.code`,
+    [id],
+  );
+  return {
+    id: h.id,
+    publicId: h.public_id,
+    occurredAt: h.occurred_at,
+    description: h.description,
+    sourcePlatform: h.source_platform,
+    sourceKind: h.source_kind,
+    sourceRef: h.source_ref,
+    reversesId: h.reverses_id,
+    createdBy: h.created_by,
+    status: h.status,
+    reversedBy: h.reversed_by,
+    entries: lines.map((l) => ({
+      accountCode: l.code,
+      accountName: l.name,
+      direction: l.direction,
+      amountMinor: fromMinor(toMinor(l.amount_minor)),
+      currency: l.currency,
+      subject: {
+        ...(l.subject_agent_ref ? { agent: l.subject_agent_ref } : {}),
+        ...(l.subject_project_ref ? { project: l.subject_project_ref } : {}),
+        ...(l.subject_goal_ref ? { goal: l.subject_goal_ref } : {}),
+        ...(l.subject_work_ref ? { work: l.subject_work_ref } : {}),
+      },
+    })),
+  };
 }

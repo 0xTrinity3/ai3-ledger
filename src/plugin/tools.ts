@@ -53,7 +53,9 @@ import {
 } from '../core/index.js';
 import { isConnected, publishInvoice, sendInvoice, type FetchLike } from './ai3.js';
 import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, pay, requestFaucet, syncWalletFeed } from './tempo.js';
+import { connectStripe, payInvoiceByCard, refreshStripe, syncStripeFeed } from './stripe.js';
 import { RecourseError, DISPUTE_CLAUSE, buildBundle, describeRuling, fileDispute, getCase, invoiceForBundle, type CaseRecord, type Ruling } from './recourse.js';
+import { BOOKS_TOOL_DECLARATIONS, isBooksTool, runBooksTool } from './books-tools.js';
 
 export interface ToolDeps {
   db: LedgerDb;
@@ -157,7 +159,7 @@ function lineSummary(line: StatementLine): Record<string, unknown> {
 }
 
 /** The machine-readable copy of a hosted invoice on ai3.co (or any host serving the same JSON). */
-export interface RemoteInvoice { number: string; currency: string; totalMinor: string; outstandingMinor: string; issuedAt: string | null; dueAt: string | null; status: string; lines: Array<{ description: string; quantity: string; amountMinor: string }>; notes: string | null; paymentMethods: Array<{ kind: string; label: string; details: Record<string, string> }>; company: { name: string; email: string | null }; disputes: string | null; url: string }
+export interface RemoteInvoice { number: string; currency: string; totalMinor: string; outstandingMinor: string; issuedAt: string | null; dueAt: string | null; status: string; lines: Array<{ description: string; quantity: string; amountMinor: string }>; notes: string | null; paymentMethods: Array<{ kind: string; label: string; details: Record<string, string> }>; company: { name: string; email: string | null }; disputes: string | null; url: string; /** ai3.co says the seller takes card payments through Stripe */ stripe: { payable: boolean; test?: boolean } | null }
 export async function fetchInvoiceDocument(fetch: FetchLike, url: string): Promise<RemoteInvoice> {
   if (!/^https:\/\/[^\s/]+\/i\/[A-Za-z0-9_-]{16,80}$/.test(url.trim())) throw new LedgerError('the invoice link must look like https://ai3.co/i/<token>', 'invalid');
   const r = await fetch(`${url.trim()}.json`, { headers: { accept: 'application/json' } });
@@ -165,7 +167,8 @@ export async function fetchInvoiceDocument(fetch: FetchLike, url: string): Promi
   const d = (await r.json()) as Partial<RemoteInvoice> & { invoice?: Partial<RemoteInvoice> };
   const inv = (d.invoice ?? d) as Partial<RemoteInvoice>;
   if (!inv.number || !inv.currency) throw new LedgerError('the invoice link did not return an invoice', 'invalid');
-  return { number: inv.number, currency: inv.currency, totalMinor: String(inv.totalMinor ?? '0'), outstandingMinor: String(inv.outstandingMinor ?? '0'), issuedAt: inv.issuedAt ?? null, dueAt: inv.dueAt ?? null, status: inv.status ?? 'issued', lines: inv.lines ?? [], notes: inv.notes ?? null, paymentMethods: inv.paymentMethods ?? [], company: { name: inv.company?.name ?? 'Unknown', email: inv.company?.email ?? null }, disputes: inv.disputes ?? null, url: url.trim() };
+  const stripeInfo = (d as { stripe?: { payable?: boolean; test?: boolean } }).stripe;
+  return { number: inv.number, currency: inv.currency, totalMinor: String(inv.totalMinor ?? '0'), outstandingMinor: String(inv.outstandingMinor ?? '0'), issuedAt: inv.issuedAt ?? null, dueAt: inv.dueAt ?? null, status: inv.status ?? 'issued', lines: inv.lines ?? [], notes: inv.notes ?? null, paymentMethods: inv.paymentMethods ?? [], company: { name: inv.company?.name ?? 'Unknown', email: inv.company?.email ?? null }, disputes: inv.disputes ?? null, url: url.trim(), stripe: stripeInfo ? { payable: stripeInfo.payable === true, test: stripeInfo.test === true } : null };
 }
 
 /** Find an invoice by id or number, within the company. */
@@ -384,11 +387,12 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
   {
     name: 'pay-invoice',
     displayName: 'Pay an invoice',
-    description: 'Pay an invoice the company received, in pathUSD from the company wallet, with the invoice number in the transfer memo so the seller’s books reconcile it automatically. Give the invoice’s online link (an ai3.co/i/… URL) and the amount and address are read from it; or give a raw address and amount. Books the payment as an expense.',
+    description: 'Pay an invoice the company received. Two rails: pathUSD from the company wallet on Tempo (invoice number in the transfer memo, so the seller’s books reconcile it), or the card the owner saved on ai3.co through Stripe (the seller must take card payments; the charge lands on their Stripe account with the invoice number). Give the invoice’s online link (an ai3.co/i/… URL) and amount, currency, payee and invoice number are read from it; or give a raw wallet address and amount. rail defaults to auto: the wallet when the invoice offers one and the balance covers it, else the card. Books the payment as an expense.',
     parametersSchema: {
       type: 'object',
       properties: {
         invoiceUrl: { type: 'string', description: 'The invoice’s online link, e.g. https://ai3.co/i/abc. Amount, currency, payee address and invoice number come from it.' },
+        rail: { type: 'string', enum: ['auto', 'tempo', 'stripe'], description: 'How to pay: the Tempo wallet, the saved card through Stripe, or auto (default).' },
         to: { type: 'string', description: 'Payee wallet address, when there is no invoice link.' },
         amount: { ...AMOUNT, description: 'Amount to pay. Defaults to the invoice’s outstanding amount.' },
         memo: { type: 'string', description: 'Up to 32 characters in the transfer memo. Defaults to the invoice number.' },
@@ -397,6 +401,12 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
       },
       additionalProperties: false,
     },
+  },
+  {
+    name: 'stripe',
+    displayName: 'Stripe (cards)',
+    description: 'The company’s Stripe through ai3.co: whether card payments are on (invoices then carry a Pay by card button and other companies can pay from their saved card), the card this company has on file for paying others, and links to fix either. Pass connect true to start or continue Stripe onboarding (returns a link the owner opens); sync true to read new Stripe charges, fees and payouts into the books now.',
+    parametersSchema: { type: 'object', properties: { connect: { type: 'boolean', description: 'Create the connected account if needed and return the onboarding link.' }, sync: { type: 'boolean', description: 'Read the Stripe balance into the books now instead of waiting for the feed job.' } }, additionalProperties: false },
   },
   {
     name: 'dispute-invoice',
@@ -429,6 +439,7 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
     description: 'Carry out a ruling’s money instruction from the company wallet: every transfer the ruling says this company owes is sent in pathUSD with the case id in the memo, and booked.',
     parametersSchema: { type: 'object', properties: { dispute: { type: 'string', description: 'Dispute id or Recourse case id.' } }, required: ['dispute'], additionalProperties: false },
   },
+  ...BOOKS_TOOL_DECLARATIONS,
 ];
 
 // ---------------------------------------------------------------------------
@@ -696,19 +707,59 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
           data: { address: w.address, network: w.network, networkLabel: TEMPO_NETWORK_LABEL, asset: PATH_USD_SYMBOL, balance: bal === null ? null : minorToMajor(bal), explorer: explorerAddress(w.address), bankAccountId: w.bankAccountId, paymentMethodId: w.paymentMethodId, faucet, synced },
         };
       }
+      case 'stripe': {
+        const settings = await getSettings(db, companyId, deps.baseCurrency);
+        if (!isConnected(settings)) return { content: 'Stripe runs through ai3.co, and this company is not connected to ai3.co yet. Ask the owner to add the company key under Finance › Settings.', data: { connected: false } };
+        const wantConnect = p['connect'] === true;
+        const { remote, link } = wantConnect ? await connectStripe(db, deps.fetch, settings, companyId, { companyName: await deps.companyName(companyId) }, deps.baseCurrency) : await refreshStripe(db, deps.fetch, settings, companyId, deps.baseCurrency);
+        let synced: Awaited<ReturnType<typeof syncStripeFeed>> = null;
+        if (p['sync'] === true) synced = await syncStripeFeed(db, deps.fetch, settings, companyId, { by });
+        const state = !remote.connected ? 'not connected: no Stripe account yet' : remote.chargesEnabled ? 'card payments on' : `onboarding incomplete${remote.requirementsDue.length ? ` (${remote.requirementsDue.length} item(s) still needed)` : ''}`;
+        return {
+          content: `Stripe: ${state}${remote.test ? ' (test mode)' : ''}. Card on file for paying others: ${remote.card ? `${remote.card.brand} ····${remote.card.last4 ?? ''}` : 'none'}${remote.onboardingUrl ? `. Onboarding link for the owner: ${remote.onboardingUrl}` : ''}${!remote.card && remote.cardUrl ? `. Add a card: ${remote.cardUrl}` : ''}${synced ? `. Stripe read: ${synced.imported} new line(s), ${synced.autoPosted} posted, ${synced.leftForReview} to review.` : ''}`,
+          data: { ...remote, bankAccountId: link?.bankAccountId ?? null, paymentMethodId: link?.paymentMethodId ?? null, synced },
+        };
+      }
       case 'pay-invoice': {
+        const url = str(p['invoiceUrl']);
+        const railParam = str(p['rail']) ?? 'auto';
+        if (!['auto', 'tempo', 'stripe'].includes(railParam)) throw new LedgerError('rail must be auto, tempo or stripe', 'invalid');
+        const doc = url ? await fetchInvoiceDocument(deps.fetch, url) : null;
+        const tempoMethod = doc?.paymentMethods.find((m) => m.kind === 'crypto' && /tempo/i.test(m.details.network ?? '') && m.details.address) ?? null;
+        const cardPayable = Boolean(doc && (doc.stripe?.payable || doc.paymentMethods.some((m) => m.kind === 'stripe' && m.details.account)));
+        let requested = p['amount'] !== undefined && p['amount'] !== '' ? majorToMinor(p['amount']) : null;
+        // Which rail: what the invoice offers, what the company holds.
+        let rail: 'tempo' | 'stripe' = railParam === 'stripe' ? 'stripe' : 'tempo';
+        if (railParam === 'auto' && doc) {
+          const need = requested ?? BigInt(doc.outstandingMinor);
+          let walletCovers = false;
+          if (tempoMethod && doc.currency === 'USD') {
+            const w = await ensureWallet(db, companyId, deps.baseCurrency);
+            const bal = await balanceCents(w.wallet.address).catch(() => null);
+            walletCovers = bal !== null && bal >= need;
+          }
+          rail = walletCovers ? 'tempo' : cardPayable ? 'stripe' : 'tempo';
+        }
+        if (rail === 'stripe') {
+          if (!doc || !url) throw new LedgerError('paying by card needs the invoice’s online link', 'invalid');
+          if (!cardPayable) throw new LedgerError(`invoice ${doc.number} from ${doc.company.name} cannot be paid by card: the seller has not connected Stripe. Pay from the wallet instead, or ask them.`, 'invalid');
+          const settings = await getSettings(db, companyId, deps.baseCurrency);
+          const r = await payInvoiceByCard(db, deps.fetch, settings, companyId, { invoiceUrl: url, amountCents: requested, description: str(p['description']) ?? null, accountCode: str(p['accountCode']) ?? null, by });
+          return {
+            content: `Paid ${minorToMajor(r.amountMinor)} ${r.currency} by card${r.card ? ` (${r.card.brand} ····${r.card.last4 ?? ''})` : ''} for invoice ${r.invoiceNumber} from ${r.seller} through Stripe. Payment ${r.paymentIntentId}. Booked to ${r.accountCode}.`,
+            data: { rail: 'stripe', paymentIntentId: r.paymentIntentId, amount: minorToMajor(r.amountMinor), currency: r.currency, invoice: r.invoiceNumber, seller: r.seller, fee: minorToMajor(BigInt(r.feeMinor || '0')), accountCode: r.accountCode, at: r.at },
+          };
+        }
         const { wallet } = await ensureWallet(db, companyId, deps.baseCurrency);
         let to = str(p['to']);
-        let amountCents = p['amount'] !== undefined && p['amount'] !== '' ? majorToMinor(p['amount']) : null;
+        let amountCents = requested;
         let memo = str(p['memo']);
         let description = str(p['description']);
-        const url = str(p['invoiceUrl']);
         let remote: { number: string; company: string; currency: string } | null = null;
-        if (url) {
-          const doc = await fetchInvoiceDocument(deps.fetch, url);
-          const crypto = doc.paymentMethods.find((m) => m.kind === 'crypto' && /tempo/i.test(m.details.network ?? '') && m.details.address);
-          if (!crypto?.details.address) throw new LedgerError(`invoice ${doc.number} offers no Tempo wallet to pay into`, 'invalid');
-          if (doc.currency !== 'USD') throw new LedgerError(`invoice ${doc.number} is in ${doc.currency}; the wallet pays ${PATH_USD_SYMBOL} (USD) only`, 'invalid');
+        if (doc) {
+          const crypto = tempoMethod;
+          if (!crypto?.details.address) throw new LedgerError(`invoice ${doc.number} offers no Tempo wallet to pay into${cardPayable ? '; pass rail "stripe" to pay by card' : ''}`, 'invalid');
+          if (doc.currency !== 'USD') throw new LedgerError(`invoice ${doc.number} is in ${doc.currency}; the wallet pays ${PATH_USD_SYMBOL} (USD) only${cardPayable ? '; pass rail "stripe" to pay by card' : ''}`, 'invalid');
           to = crypto.details.address;
           amountCents = amountCents ?? BigInt(doc.outstandingMinor);
           memo = memo ?? doc.number;
@@ -824,6 +875,7 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
         return { content: `Settled: ${owed.map((t, i) => `${minorToMajor(BigInt(t.amount_minor))} ${PATH_USD_SYMBOL} to ${t.to} (${txs[i]})`).join('; ')}.`, data: { disputeId: after.id, settledTx: after.settledTx, transfers: owed.map((t, i) => ({ to: t.to, amount: minorToMajor(BigInt(t.amount_minor)), txHash: txs[i] })) } };
       }
       default:
+        if (isBooksTool(name)) return runBooksTool(db, name, rawParams, run);
         return { error: `Unknown tool ${name}` };
     }
   } catch (err) {

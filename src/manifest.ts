@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.11.1',
+  version: '0.12.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -28,6 +28,7 @@ const manifest: PaperclipPluginManifestV1 = {
     'api.routes.register',
     'ui.page.register',
     'ui.sidebar.register',
+    'instance.settings.register',
     'http.outbound',
     'agent.tools.register',
     'issues.read',
@@ -78,9 +79,15 @@ const manifest: PaperclipPluginManifestV1 = {
       schedule: '0 9 * * *',
     },
     {
+      jobKey: 'publish',
+      displayName: 'Publish summary',
+      description: 'Once a day, sends each connected company’s figures (revenue, profit, cash, burn, receivables, model costs over the trailing 30 days) to ai3.co for the owner’s portfolio page and, only where the company opted in, the public leaderboard.',
+      schedule: '30 4 * * *',
+    },
+    {
       jobKey: 'chain-feed',
       displayName: 'Wallet feed',
-      description: 'Reads each company wallet’s transfers on Tempo into its bank account, posts what the matcher is sure of, and refreshes disputes still being decided.',
+      description: 'Reads the company wallet on Tempo, every connected wallet address on Tempo, Base and Ethereum, and every connected exchange account into their bank accounts; posts what the matcher is sure of; refreshes disputes still being decided.',
       schedule: '*/5 * * * *',
     },
   ],

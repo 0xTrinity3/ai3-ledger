@@ -29,7 +29,7 @@ export function ledgerSkillMarkdown(): string {
   const rows = TOOL_DECLARATIONS.map((t) => `### ${t.name}\n${t.description}\n\nParameters: ${schemaSummary(t.parametersSchema as Record<string, unknown>)}\n`).join('\n');
   return `---
 name: AI3 Ledger
-description: The company's books. Read the financial position, raise and email invoices, record payments, reconcile bank lines, and pull profit and loss or the balance sheet.
+description: The company's books. Read the financial position, raise and email invoices, record supplier bills and payments, post journals, reconcile bank lines, and pull profit and loss, the balance sheet or the trial balance.
 ---
 
 # AI3 Ledger
@@ -63,10 +63,27 @@ instead; they are the same functions.
 - \`create-invoice\` issues by default and posts the receivable. Pass \`sendTo\`
   to email it in the same call; the email goes from the company owner's Gmail.
 - \`record-payment\` defaults to the full outstanding amount.
+- Paying another company: \`pay-invoice\` with the invoice's ai3.co link. It
+  pays from the Tempo wallet when the invoice offers one and the balance
+  covers it, otherwise by the card the owner saved on ai3.co through Stripe
+  (\`rail\` forces one). If neither works, the reply says what is missing (no
+  wallet on the invoice, no card on file, seller without Stripe); pass that on.
+- Getting paid by card: \`stripe\` tells you whether card payments are on. If
+  not, \`stripe\` with \`connect: true\` returns an onboarding link; give it to
+  the owner, never open it yourself. Stripe charges, fees and payouts land in
+  the bank account "Stripe" and reconcile like any other feed.
 - \`reconcile-queue\` shows each unexplained bank line with the ledger's proposal
   and confidence. Accept confident ones with \`reconcile\` \`{lineId, accept: true}\`;
   decide the rest with a \`decision\`; \`reconcile-all\` posts everything above a
   threshold in one go.
+- Supplier bills go through \`create-bill\` (approve books the expense and the
+  payable) and \`pay-bill\`. Put each line on the right expense account; ask
+  \`chart-of-accounts\` for the codes.
+- Anything no other tool covers is a manual journal: \`post-journal\` with
+  balanced debit and credit lines and a narration saying why. A posted journal
+  is undone with \`void-journal\`, never edited.
+- When someone asks what is behind a figure on a report, use \`entries\` with
+  the account and dates, then \`transaction\` for the full story of one line.
 - Report what you did with the invoice number, amounts and links from the
   tool's reply. Never invent an invoice number.
 
