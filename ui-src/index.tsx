@@ -357,6 +357,83 @@ function CashChart({ txs }: { txs: Tx[] }) {
   );
 }
 
+interface CreditsView { hosted: boolean; keyed: boolean; slug: string | null; at: string | null; markup: number; platformWallet: string | null; memo: string | null; creditsUrl: string | null; modelUrl: string | null; grantedMinor: string; usageMinor: string; chargedMinor: string; remainingMinor: string; usageMonthlyMinor: string; keyDisabled: boolean; entries: Array<{ at: string; amountMinor: string; kind: string; ref: string | null }>; message?: string | null }
+interface CreditsData { connected: boolean; view: CreditsView | null; error?: string | null; bookedMinor: string | null }
+
+/** The company's prepaid model credits at ai3.co. On the Position page as one card; in Settings with the top-up instructions and history. */
+function CreditsCard({ companyId, full }: { companyId: string; full: boolean }) {
+  const nav = useHostNavigation();
+  const data = usePluginData<CreditsData>('credits', { companyId });
+  const sync = usePluginAction('credits.sync');
+  const toast = usePluginToast();
+  const { run, busy } = useRun([data.refresh]);
+  const [copied, setCopied] = useState(false);
+  const d = data.data;
+  const v = d?.view ?? null;
+  if (d && !d.connected) return full ? <div className="ai3-card" style={{ marginTop: 14 }}><h3>Model credits</h3><p className="ai3-note" style={{ marginTop: 0 }}>Connect this company to ai3.co under Finance › Settings to see the model credits its agents run on.</p></div> : null;
+  if (v && (!v.hosted || !v.keyed)) return full ? <div className="ai3-card" style={{ marginTop: 14 }}><h3>Model credits</h3><p className="ai3-note" style={{ marginTop: 0 }}>{v.message ?? 'This company runs on its own model key, so ai3.co meters nothing for it.'}</p></div> : null;
+  const booked = d?.bookedMinor ?? null;
+  const drift = v && booked !== null ? BigInt(v.remainingMinor) - BigInt(booked) : null;
+  const doSync = () => run(async () => { const r = (await sync({ companyId })) as { grantsBooked: number; usageBookedMinor: string; skipped: string | null }; if (r.skipped) throw new Error(r.skipped); toast({ title: 'Credits booked', body: `${r.grantsBooked} grant(s) and ${fmt(r.usageBookedMinor, { symbol: false })} of usage posted.`, tone: 'success' }); }, 'Credits booked');
+  return (
+    <div className="ai3-card" style={full ? { marginTop: 14 } : undefined}>
+      <div className="ai3-toolbar" style={{ marginBottom: 6 }}>
+        <h3 style={{ margin: 0 }}>Model credits <span className="ctx">prepaid at ai3.co</span></h3>
+        {v?.keyDisabled ? <span className="ai3-badge bad">used up · agents paused</span> : v ? <span className="ai3-badge paid">running</span> : null}
+      </div>
+      <Failure error={data.error} />
+      {d?.error && <div className="ai3-cap red">ai3.co did not answer: {d.error}</div>}
+      {v && (
+        <>
+          <div className="ai3-pair">
+            <div>
+              <div className="ai3-big" style={{ fontSize: full ? 26 : 22, color: v.keyDisabled ? 'var(--ai3-red)' : undefined }}>{fmt(v.remainingMinor, { currency: 'USD' })}</div>
+              <div className="ai3-cap">Balance left of {fmt(v.grantedMinor, { currency: 'USD' })} put in</div>
+            </div>
+            <div>
+              <div className="ai3-big" style={{ fontSize: full ? 26 : 22 }}>{fmt(v.usageMonthlyMinor, { currency: 'USD' })}</div>
+              <div className="ai3-cap">Model usage at cost this month · {fmt(v.chargedMinor, { currency: 'USD' })} charged in all, at cost plus {Math.round(v.markup * 100)}%</div>
+            </div>
+          </div>
+          {drift !== null && drift !== 0n && <div className="ai3-cap" style={{ marginTop: 6 }}>The books carry {fmt(booked!, { currency: 'USD' })} in 1300 Prepaid model credits, {fmt(drift < 0n ? -drift : drift, { currency: 'USD' })} {drift > 0n ? 'behind' : 'ahead of'} ai3.co. <a href="#" onClick={(e) => { e.preventDefault(); void doSync(); }}>Book the difference</a>.</div>}
+          {!full && <div className="ai3-cap" style={{ marginTop: 8 }}><a {...nav.linkProps('/company/settings/finance')}>Top up and history</a>{v.modelUrl ? <> · <a href={v.modelUrl} target="_blank" rel="noreferrer">default model</a></> : null}</div>}
+          {full && (
+            <>
+              <div style={{ marginTop: 12, fontWeight: 600 }}>Top up</div>
+              <p className="ai3-note" style={{ marginTop: 4 }}>Credits pay for the models your agents use through AI3's key, at cost plus {Math.round(v.markup * 100)}%. Agents stop at zero and resume when topped up.</p>
+              {v.platformWallet && v.memo && (
+                <div className="ai3-line" style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 600 }}>Pay in pathUSD on Tempo <span className="ai3-cap" style={{ display: 'inline' }}>· testnet for now</span></div>
+                  <div className="ai3-cap" style={{ wordBreak: 'break-all' }}>Send any amount to <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v.platformWallet}</span> with the memo <strong>{v.memo}</strong>. Credited within the hour; the chain feed books it as a transfer into Prepaid model credits.</div>
+                  <div className="ai3-actions" style={{ marginTop: 8 }}>
+                    <button className="ai3-btn small" onClick={() => { void navigator.clipboard?.writeText(v.platformWallet!).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}>{copied ? 'Copied' : 'Copy address'}</button>
+                    {v.creditsUrl && <a className="ai3-btn small" href={v.creditsUrl} target="_blank" rel="noreferrer">Card top-up and auto-recharge on ai3.co</a>}
+                  </div>
+                  <p className="ai3-note">An agent can do it with the pay-invoice tool: to {v.platformWallet.slice(0, 8)}…, amount, memo {v.memo}.</p>
+                </div>
+              )}
+              {v.entries.length > 0 && (
+                <>
+                  <div style={{ marginTop: 12, fontWeight: 600 }}>Put in</div>
+                  <table className="ai3-table">
+                    <thead><tr><th>When</th><th>Kind</th><th>Reference</th><th className="num">USD</th></tr></thead>
+                    <tbody>{v.entries.slice().reverse().slice(0, 20).map((e, i) => <tr key={`${e.ref ?? ''}:${i}`}><td className="muted">{dateLong(e.at)}</td><td>{e.kind === 'free' ? 'Starter credit' : e.kind === 'admin' ? 'Grant' : e.kind === 'crypto' ? 'pathUSD top-up' : e.kind === 'stripe' || e.kind === 'card' ? 'Card top-up' : e.kind}</td><td className="muted" style={{ wordBreak: 'break-all' }}>{e.ref ?? ''}</td><td className="num">{fmt(e.amountMinor, { symbol: false })}</td></tr>)}</tbody>
+                  </table>
+                </>
+              )}
+              <div className="ai3-actions" style={{ marginTop: 10 }}>
+                <button className="ai3-btn" disabled={busy} onClick={() => void doSync()}>Book into the ledger now</button>
+                <button className="ai3-btn" onClick={() => data.refresh()}>Refresh</button>
+              </div>
+              <p className="ai3-note">Booked every hour: grants and card top-ups into 1300 Prepaid model credits from Contributed funds, usage out of it into 5000 Model inference, pathUSD top-ups through the wallet feed.{v.at ? ` ai3.co figures as of ${dateLong(v.at)}.` : ''}</p>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Position (the dashboard)
 // ---------------------------------------------------------------------------
@@ -451,6 +528,7 @@ function PositionTab({ companyId, company }: { companyId: string; company: Compa
           <div className="ai3-big" style={{ color: p && BigInt(p.monthToDate.netMinor) < 0n ? 'var(--ai3-red)' : undefined }}>{p ? fmt(p.monthToDate.netMinor, { currency: cur }) : '…'}</div>
           <div className="ai3-cap">{p ? `Income ${fmt(p.monthToDate.incomeMinor, { currency: cur })} · Expenses ${fmt(p.monthToDate.expenseMinor, { currency: cur })}` : ''}</div>
         </div>
+        <CreditsCard companyId={companyId} full={false} />
       </div>
 
       <div className="ai3-grid two">
@@ -1281,6 +1359,7 @@ function SettingsTab({ companyId, company }: { companyId: string; company: Compa
       </div>
       <WalletCard companyId={companyId} />
       <StripeCard companyId={companyId} />
+      <CreditsCard companyId={companyId} full />
       <div className="ai3-card" style={{ marginTop: 14 }}>
         <div className="ai3-toolbar">
           <h3 style={{ margin: 0 }}>Payment options <span className="ctx">what customers see under "How to pay"</span></h3>

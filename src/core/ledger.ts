@@ -736,3 +736,15 @@ export async function getTransaction(db: LedgerDb, companyId: string, id: string
     })),
   };
 }
+
+/** Total posted on one side of an account from one platform and kind, for replay-safe cumulative bookings (credits usage). */
+export async function sumPostedBySource(db: LedgerDb, companyId: string, sourcePlatform: string, sourceKind: string, accountCode: string, direction: Direction): Promise<bigint> {
+  const rows = await db.sql.query<{ total: unknown }>(
+    `SELECT COALESCE(SUM(e.amount_minor), 0) AS total FROM ${table(db, 'entries')} e
+       JOIN ${table(db, 'transactions')} t ON t.id = e.transaction_id
+       JOIN ${table(db, 'accounts')} a ON a.id = e.account_id
+      WHERE t.company_id = $1 AND t.status = 'posted' AND t.source_platform = $2 AND t.source_kind = $3 AND a.code = $4 AND e.direction = $5`,
+    [companyId, sourcePlatform, sourceKind, accountCode, direction],
+  );
+  return toMinor(rows[0]?.total ?? 0);
+}

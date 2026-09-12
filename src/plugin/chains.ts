@@ -283,6 +283,12 @@ export async function syncChainAccount(
           const txId = await findTransactionBySourceRef(db, companyId, c.refPrefix, `${c.refPrefix}:${hash}`);
           if (txId) { await applyDecision(db, companyId, line.id, { kind: 'match', transactionIds: [txId], reason: 'Same transaction hash as the payment booked when it was sent.' }, by); settled += 1; continue; }
         }
+        // A send with the memo credit:<slug> is a top-up of the company's model credits at ai3.co: prepaid, not spent.
+        if (cents < 0n && /^credit:[a-z0-9-]+$/i.test(line.reference ?? '')) {
+          await applyDecision(db, companyId, line.id, { kind: 'create', accountCode: ACCOUNT.PREPAID_CREDITS, description: `Model credits topped up at ai3.co · ${line.reference}`, contactName: 'AI3', reason: 'Sent to the AI3 platform wallet with a credit memo.' }, by);
+          settled += 1;
+          continue;
+        }
         if (c.testnet && cents > 0n && (line.payee ?? '').toLowerCase() === ZERO) {
           await applyDecision(db, companyId, line.id, { kind: 'create', accountCode: ACCOUNT.CONTRIBUTED_FUNDS, description: 'Test funds from the Tempo faucet', contactName: 'Tempo faucet', reason: 'Minted to this wallet by the testnet faucet.' }, by);
           settled += 1;

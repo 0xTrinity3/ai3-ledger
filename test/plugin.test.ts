@@ -246,7 +246,7 @@ describe('M2 · position', () => {
     expect(p.monthToDate.expenseMinor).toBe('0');
     expect(p.runwayDays).toBeNull();
     expect(p.balanceSheet.balances).toBe(true);
-    expect(p.accounts.length).toBe(13);
+    expect(p.accounts.length).toBe(14);
   });
 
   it('reports treasury, burn and runway from posted entries and the balance sheet balances', async () => {

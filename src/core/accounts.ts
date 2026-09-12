@@ -13,6 +13,7 @@ export interface SeedAccount {
 export const ACCOUNT = {
   TREASURY: '1000',
   RECEIVABLES: '1100',
+  PREPAID_CREDITS: '1300',
   PAYABLES: '2000',
   TAX_PAYABLE: '2100',
   CONTRIBUTED_FUNDS: '3000',
@@ -31,6 +32,7 @@ export type AccountCode = (typeof ACCOUNT)[keyof typeof ACCOUNT];
 export const SEED_ACCOUNTS: readonly SeedAccount[] = [
   { code: ACCOUNT.TREASURY, name: 'Treasury', type: 'asset' },
   { code: ACCOUNT.RECEIVABLES, name: 'Receivables', type: 'asset' },
+  { code: ACCOUNT.PREPAID_CREDITS, name: 'Prepaid model credits', type: 'asset' },
   { code: ACCOUNT.PAYABLES, name: 'Payables', type: 'liability' },
   { code: ACCOUNT.TAX_PAYABLE, name: 'Tax payable', type: 'liability' },
   { code: ACCOUNT.CONTRIBUTED_FUNDS, name: 'Contributed funds', type: 'equity' },

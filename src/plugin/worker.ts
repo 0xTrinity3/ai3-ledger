@@ -88,6 +88,7 @@ import { publishSummary, type IssueLike } from './publish.js';
 import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, requestFaucet, syncWalletFeed } from './tempo.js';
 import { getCase, type Ruling } from './recourse.js';
 import { CHAINS, chainSummary } from './chains.js';
+import { fetchCredits, syncCredits } from './credits.js';
 import { exchangeSummaries } from './exchanges.js';
 import { bookBrowserPayment, connectAddressWallet, connectExchangeAccount, connectedWalletsView, disconnectWallet, ownershipMessage, payFromCompanyWallet, remoteInvoiceView, syncAllConnected, syncWalletForBank } from './pay.js';
 import { registerBooks } from './books.js';
@@ -1005,6 +1006,38 @@ const plugin = definePlugin({
       boardOnly(ctx);
       const companyId = await companyOf(params);
       return (await syncWalletFeed(ledger(), companyId, { by: 'board', autoPost: params['autoPost'] !== false })) ?? { imported: 0 };
+    });
+    // Model credits: the prepaid balance held with ai3.co, and its booking into 1300 / 5000.
+    context.data.register('credits', async (params) => {
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId, CURRENCY);
+      if (!isConnected(settings)) return { connected: false, view: null, bookedMinor: null };
+      let view = null;
+      let error: string | null = null;
+      try { view = await fetchCredits(httpFetch, settings, companyId); } catch (err) { error = err instanceof Error ? err.message : String(err); }
+      const bal = await accountBalances(ledger(), companyId);
+      const prepaid = bal.find((a) => a.code === ACCOUNT.PREPAID_CREDITS);
+      return { connected: true, view, error, bookedMinor: prepaid ? prepaid.balanceMinor : '0' };
+    });
+    context.actions.register('credits.sync', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      return syncCredits(ledger(), httpFetch, await getSettings(ledger(), companyId, CURRENCY), companyId, 'board');
+    });
+    context.jobs.register('credits', async (job) => {
+      const companies = await context.companies.list({ limit: 500 });
+      let synced = 0;
+      const failures: string[] = [];
+      for (const company of companies) {
+        try {
+          const r = await syncCredits(ledger(), httpFetch, await getSettings(ledger(), company.id, CURRENCY), company.id, 'credits');
+          if (r.fetched && !r.skipped) synced += 1;
+        } catch (err) {
+          failures.push(`${company.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      context.logger.info('ledger: credits synced', { runId: job.runId, synced, failed: failures.length });
+      if (failures.length > 0) throw new Error(`credits: ${failures.join('; ')}`.slice(0, 1000));
     });
     // Connected wallets: addresses watched on a chain, exchange accounts read by key.
     context.data.register('chains', async (params) => {

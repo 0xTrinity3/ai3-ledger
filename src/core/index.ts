@@ -105,3 +105,4 @@ export type { StripeLink } from './stripe.js';
 export { getStripeLink, saveStripeLink } from './stripe.js';
 export type { ChartLine, ParsedChart, TrialBalanceInputLine, ParsedTrialBalance, TrialBalanceImportResult, ParsedDoc, ParsedDocLine, ParsedDocs, DocPreview, DocPreviewRow, DocImportResult } from './imports.js';
 export { openingMoment, inferAccountType, parseChartCsv, parseTrialBalanceCsv, importChart, importTrialBalance, undoTrialBalance, standingConversion, conversionDateOf, parseDocumentsCsv, previewDocuments, importDocuments } from './imports.js';
+export { sumPostedBySource } from './ledger.js';

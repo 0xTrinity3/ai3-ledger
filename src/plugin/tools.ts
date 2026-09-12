@@ -54,6 +54,7 @@ import {
 import { isConnected, publishInvoice, sendInvoice, type FetchLike } from './ai3.js';
 import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, pay, requestFaucet, syncWalletFeed } from './tempo.js';
 import { connectStripe, payInvoiceByCard, refreshStripe, syncStripeFeed } from './stripe.js';
+import { fetchCredits, syncCredits } from './credits.js';
 import { RecourseError, DISPUTE_CLAUSE, buildBundle, describeRuling, fileDispute, getCase, invoiceForBundle, type CaseRecord, type Ruling } from './recourse.js';
 import { BOOKS_TOOL_DECLARATIONS, isBooksTool, runBooksTool } from './books-tools.js';
 
@@ -301,6 +302,12 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
     displayName: 'Write off an invoice',
     description: 'Give up on collecting what is outstanding on an invoice: the receivable moves to bad debt expense.',
     parametersSchema: { type: 'object', properties: { invoice: { type: 'string' }, reason: { type: 'string' } }, required: ['invoice'], additionalProperties: false },
+  },
+  {
+    name: 'credits',
+    displayName: 'Model credits',
+    description: 'The company’s prepaid model credits at ai3.co: balance left, what was put in, what model usage has been charged (at cost plus the platform markup), and how to top up (pathUSD to the platform wallet with the credit memo, which the pay-invoice tool can send). Pass sync true to book the latest grants and usage into the ledger now.',
+    parametersSchema: { type: 'object', properties: { sync: { type: 'boolean' } }, additionalProperties: false },
   },
   {
     name: 'bank-accounts',
@@ -622,6 +629,17 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
         const inv = await findInvoice(db, companyId, p['invoice']);
         const after = await writeOffInvoice(db, companyId, inv.id, { createdBy: by, ...(str(p['reason']) ? { reason: str(p['reason'])! } : {}) });
         return { content: `${inv.number} written off: ${money(inv.outstandingMinor, inv.currency)} to bad debt.`, data: invoiceSummary(after) };
+      }
+      case 'credits': {
+        const settings = await getSettings(db, companyId, deps.baseCurrency);
+        if (!isConnected(settings)) return { content: 'This company is not connected to ai3.co, so no model credits are metered for it.', data: { connected: false } };
+        const v = await fetchCredits(deps.fetch, settings, companyId);
+        const synced = p['sync'] === true ? await syncCredits(db, deps.fetch, settings, companyId, by) : null;
+        if (!v.hosted || !v.keyed) return { content: v.message ?? 'This company runs on its own model key; ai3.co meters nothing for it.', data: { ...v, synced } };
+        return {
+          content: `Model credits: ${minorToMajor(v.remainingMinor)} USD left of ${minorToMajor(v.grantedMinor)} put in; ${minorToMajor(v.chargedMinor)} charged so far (${minorToMajor(v.usageMinor)} at cost plus ${Math.round(v.markup * 100)}%), ${minorToMajor(v.usageMonthlyMinor)} at cost this month.${v.keyDisabled ? ' The key is paused: the balance is used up.' : ''}${v.platformWallet ? ` Top up by sending pathUSD to ${v.platformWallet} with memo "${v.memo}" (pay-invoice tool: to, amount, memo).` : ''}${synced ? ` Booked now: ${synced.grantsBooked} grant(s), ${minorToMajor(synced.usageBookedMinor)} usage.` : ''}`,
+          data: { ...v, remaining: minorToMajor(v.remainingMinor), granted: minorToMajor(v.grantedMinor), charged: minorToMajor(v.chargedMinor), synced },
+        };
       }
       case 'bank-accounts': {
         const banks = await listBankAccounts(db, companyId);
