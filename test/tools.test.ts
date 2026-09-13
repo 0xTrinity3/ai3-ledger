@@ -4,6 +4,7 @@
  * we call the dispatcher the way the worker does.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { openPluginTestDb, type PluginTestDb } from './harness.js';
 import { createBankAccount, importStatementLines, seedAccounts, updateSettings, postTransaction, ACCOUNT } from '../src/core/index.js';
 import { TOOL_DECLARATIONS, majorToMinor, minorToMajor, runTool, type ToolDeps } from '../src/plugin/tools.js';
@@ -49,6 +50,25 @@ describe('money at the tool boundary', () => {
     expect(minorToMajor('-5')).toBe('-0.05');
     expect(() => majorToMinor('12.345')).toThrow(/two decimals/);
     expect(() => majorToMinor('abc')).toThrow();
+  });
+});
+
+describe('the built manifest', () => {
+  it('carries this build’s words, not whatever a long-running host cached', async () => {
+    // Paperclip re-reads dist/manifest.js on upgrade and cache-busts it by
+    // mtime — but only that file. Anything it imports resolves to a URL the
+    // host's ESM cache already holds, so on a long-running box the version
+    // bumps (a literal in the manifest) while the tool descriptions and skill
+    // markdown, which live in other modules, silently stay as first loaded.
+    // The X agent shipped 0.4.3 carrying 0.4.0's skill text exactly this way.
+    const built = await readFile(new URL('../dist/manifest.js', import.meta.url), 'utf8');
+    const ours = [...built.matchAll(/^\s*(?:import|export)[^;]*from\s+["'](\.[^"']+)["']/gm)].map((m) => m[1]);
+    expect(ours).toEqual([]);
+
+    const loaded = (await import('../dist/manifest.js')).default;
+    expect(loaded.version).toBe(manifest.version);
+    expect(loaded.skills?.[0]?.markdown).toBe(ledgerSkillMarkdown());
+    expect(loaded.tools?.length).toBe(TOOL_DECLARATIONS.length);
   });
 });
 

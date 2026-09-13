@@ -1,13 +1,13 @@
 {
   "name": "@ai3/ledger",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "type": "module",
-  "description": "AI3 Ledger \u2014 accounting for agent organisations. Paperclip plugin; platform-agnostic core.",
+  "description": "AI3 Ledger — accounting for agent organisations. Paperclip plugin; platform-agnostic core.",
   "engines": {
     "node": ">=24.11.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json && node scripts/build-ui.mjs && node scripts/gen-plugin-migration.mjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json && node scripts/build-ui.mjs && node scripts/gen-plugin-migration.mjs && node scripts/bundle-manifest.mjs",
     "build:migrations": "node scripts/gen-plugin-migration.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && vitest run",
@@ -23,6 +23,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "esbuild": "^0.25.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.6.0",
