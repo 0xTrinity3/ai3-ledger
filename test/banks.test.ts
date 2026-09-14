@@ -16,12 +16,14 @@ import {
   importStatementLines,
   issueInvoice,
   listBankAccounts,
+  getSettings,
   listRules,
   listStatementLines,
   parseCsvStatement,
   parseMoney,
   parseOfxStatement,
   parseStatement,
+  updateSettings,
   position,
   postTransaction,
   propose,
@@ -234,5 +236,42 @@ describe('bank accounts and lines', () => {
     const bs = await balanceSheet(db, CO);
     expect(bs.balances).toBe(true);
     expect((await trialBalance(db, CO)).netMinor).toBe(0n);
+  });
+
+  it('a company that has turned auto-posting off gets the proposals and none of the postings', async () => {
+    // The nightly job used to post at 90% for every company on the box, which
+    // is a policy about somebody else's books. Off means off: the matcher still
+    // runs, so the queue is ready in the morning, but nothing reaches the books
+    // without a person.
+    await importStatementLines(db, CO, bankId, parseStatement('Date,Description,Amount\n2026-09-20,GITHUB INC,-7.00\n').lines);
+    const before = await balanceOf(db, CO, ACCOUNT.TOOLS_AND_APIS);
+
+    const r = await runReconciliation(db, CO, bankId, { threshold: 90, by: 'nightly', autoPost: false });
+    expect(r.autoPosted).toBe(0);
+    expect(r.leftForReview).toBeGreaterThan(0);
+    expect(await balanceOf(db, CO, ACCOUNT.TOOLS_AND_APIS)).toBe(before);
+
+    const line = (await listStatementLines(db, CO, bankId, { status: 'unreconciled' })).find((l) => l.description.includes('GITHUB'))!;
+    expect(line.proposal, 'the suggestion is still made, so the queue is useful in the morning').toBeTruthy();
+    expect(line.proposal!.kind).toBe('create');
+  });
+
+  it('the threshold and the switch are the company\u2019s own, and a silly one is refused', async () => {
+    const off = await updateSettings(db, CO, { autoReconcile: false, autoReconcileThreshold: 75 });
+    expect(off.autoReconcile).toBe(false);
+    expect(off.autoReconcileThreshold).toBe(75);
+    expect((await getSettings(db, CO)).autoReconcileThreshold).toBe(75);
+
+    // A threshold is a licence to post to somebody's books unattended, so it is
+    // clamped rather than trusted.
+    expect((await updateSettings(db, CO, { autoReconcileThreshold: 5 })).autoReconcileThreshold).toBe(50);
+    expect((await updateSettings(db, CO, { autoReconcileThreshold: 9000 })).autoReconcileThreshold).toBe(100);
+    expect((await updateSettings(db, CO, { autoReconcileThreshold: Number.NaN })).autoReconcileThreshold).toBe(90);
+
+    // And a company that never opens the screen keeps exactly what the job did
+    // before any of this existed.
+    const fresh = await getSettings(db, 'co-never-touched');
+    expect(fresh.autoReconcile).toBe(true);
+    expect(fresh.autoReconcileThreshold).toBe(90);
   });
 });

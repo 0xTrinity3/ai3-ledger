@@ -2164,6 +2164,89 @@ function ChangePanel({ companyId, line, accounts, currentBankId, onDone }: { com
   );
 }
 
+
+interface ReconcileSettings {
+  auto: { enabled: boolean; threshold: number };
+  rules: Array<{ id: string; payeeContains: string; direction: string; accountCode: string; contactName: string | null; confirmations: number; misses: number; enabled: boolean }>;
+}
+
+/**
+ * What the matcher may do without being asked, and what it has learned to do.
+ *
+ * Both of these existed and neither was on any screen. The nightly job posted
+ * at 90% confidence for every company on the box — a policy about somebody's
+ * books written into our source code — and every time a person accepted a
+ * proposal the reconciler wrote a rule that would post the next one like it,
+ * unattended, for ever, invisibly. Automation that cannot be seen or switched
+ * off is the wrong kind, however good its hit rate.
+ */
+function AutoReconcile({ companyId }: { companyId: string }) {
+  const settings = usePluginData<ReconcileSettings>('reconcile-settings', { companyId });
+  const save = usePluginAction('reconcile.settings');
+  const toggleRule = usePluginAction('rule.toggle');
+  const { run, busy } = useRun([settings.refresh]);
+  const [open, setOpen] = useState(false);
+  const auto = settings.data?.auto;
+  const rules = settings.data?.rules ?? [];
+  const live = rules.filter((r) => r.enabled);
+  if (!auto) return null;
+  return (
+    <div className="ai3-card" style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Reconciling on its own</h3>
+          <div className="ai3-cap" style={{ marginTop: 4 }}>
+            {auto.enabled
+              ? `Every night, anything the matcher is at least ${auto.threshold}% sure of is posted for you. The rest waits here.`
+              : 'Nothing is posted without you. The matcher still works overnight, so its suggestions are ready in the morning.'}
+          </div>
+        </div>
+        <a href="#" onClick={(e) => { e.preventDefault(); setOpen((v) => !v); }}>{open ? 'Close' : 'Change'}</a>
+      </div>
+      {open && (
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--ai3-hair, #e6e8ea)', paddingTop: 12 }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={auto.enabled} disabled={busy}
+              onChange={(e) => run(() => save({ companyId, enabled: e.currentTarget.checked, threshold: auto.threshold }), 'Saved')} />
+            <span>Post confident matches automatically</span>
+          </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
+            <span>Only when at least</span>
+            <select value={String(auto.threshold)} disabled={busy || !auto.enabled}
+              onChange={(e) => run(() => save({ companyId, enabled: auto.enabled, threshold: Number(e.currentTarget.value) }), 'Saved')}>
+              {[50, 60, 70, 75, 80, 85, 90, 95, 100].map((n) => <option key={n} value={n}>{n}%</option>)}
+            </select>
+            <span>confident</span>
+          </label>
+          <p className="ai3-note">A lower bar posts more and asks you less; 100% means only a certainty — an exact match to something already in the books — goes in by itself. Everything posted this way is an ordinary transaction with its reason on it, and can be reversed like any other.</p>
+
+          <h4 style={{ marginBottom: 4 }}>What it has learned</h4>
+          {rules.length === 0 && <div className="ai3-cap">Nothing yet. Confirming a suggestion teaches it to treat that payee the same way next time.</div>}
+          {rules.length > 0 && (
+            <table className="ai3-table">
+              <thead><tr><th>When the payee looks like</th><th>Post to</th><th className="num">Confirmed</th><th></th></tr></thead>
+              <tbody>
+                {rules.map((r) => (
+                  <tr key={r.id} className={r.enabled ? '' : 'muted'}>
+                    <td>{r.payeeContains}<div className="ai3-cap">{r.direction === 'in' ? 'money in' : 'money out'}{r.contactName ? ` · ${r.contactName}` : ''}</div></td>
+                    <td>{r.accountCode} {ACCOUNT_CHOICES.find((a) => a.code === r.accountCode)?.name ?? ''}</td>
+                    <td className="num">{r.confirmations}{r.misses ? ` · ${r.misses} corrected` : ''}</td>
+                    <td><button className="ai3-btn small" disabled={busy}
+                      onClick={() => run(() => toggleRule({ companyId, ruleId: r.id, enabled: !r.enabled }), r.enabled ? 'Rule off' : 'Rule on')}>
+                      {r.enabled ? 'Stop using it' : 'Use it again'}
+                    </button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {live.length > 0 && <p className="ai3-note">{live.length} rule{live.length === 1 ? '' : 's'} in use. Switching one off leaves every posting it already made exactly where it is.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReconcileTab({ companyId, company }: { companyId: string; company: Company | null }) {
   const location = useHostLocation();
   const nav = useHostNavigation();
@@ -2178,7 +2261,33 @@ function ReconcileTab({ companyId, company }: { companyId: string; company: Comp
   const cur = company?.currency ?? 'USD';
   const accounts = banks.data?.accounts ?? [];
   const bank = queue.data?.bank;
-  if (!accountId) return <><Header crumb="Reconcile" title="Reconcile" /><div className="ai3-card"><div className="ai3-empty">Pick an account on <a {...nav.linkProps('/ledger?tab=banks')}>Bank accounts</a>.</div></div></>;
+  // Reaching this screen with no account chosen used to be a dead end: one
+  // line telling you to go somewhere else. It is now the list, because
+  // "reconcile" is a thing somebody comes here to do, not a thing they arrive
+  // at by accident from another page.
+  if (!accountId) {
+    const waiting = accounts.reduce((n, a) => n + (a.unreconciled ?? 0), 0);
+    return (
+      <>
+        <Header crumb="Reconcile" title="Reconcile" sub={accounts.length ? (waiting ? `${waiting} line${waiting === 1 ? '' : 's'} across ${accounts.length} account${accounts.length === 1 ? '' : 's'} need a decision` : 'Everything is reconciled') : undefined} />
+        <AutoReconcile companyId={companyId} />
+        <Failure error={banks.error} />
+        {banks.loading && !banks.data && <div className="ai3-card"><Spinner /></div>}
+        {banks.data && accounts.length === 0 && (
+          <div className="ai3-card"><div className="ai3-empty">No bank or card account yet. <a className="ai3-btn" style={{ marginLeft: 8 }} {...nav.linkProps('/ledger?tab=banks')}>Add one</a></div></div>
+        )}
+        {accounts.map((a) => (
+          <div className="ai3-card" key={a.id} style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <strong>{a.name}</strong>
+              <div className="ai3-cap">{a.unreconciled ? `${a.unreconciled} line${a.unreconciled === 1 ? '' : 's'} waiting` : 'nothing waiting'} · in the books {fmt(a.ledgerBalanceMinor, { currency: a.currency })}{a.statementBalanceMinor === null ? '' : ` · per the statement ${fmt(a.statementBalanceMinor, { currency: a.currency })}`}</div>
+            </div>
+            <a className={`ai3-btn ${a.unreconciled ? 'primary' : ''}`} {...nav.linkProps(`/ledger?tab=reconcile&account=${a.id}`)}>{a.unreconciled ? `Reconcile ${a.unreconciled}` : 'Open'}</a>
+          </div>
+        ))}
+      </>
+    );
+  }
   const items = queue.data?.queue ?? [];
   const confident = items.filter((l) => l.proposal && l.proposal.kind !== 'ask' && l.proposal.confidence >= 90);
   return (
@@ -2195,6 +2304,7 @@ function ReconcileTab({ companyId, company }: { companyId: string; company: Comp
         }
       />
       <Failure error={queue.error ?? banks.error} />
+      <AutoReconcile companyId={companyId} />
       {queue.data?.lastRun && (
         <div className="ai3-card" style={{ marginBottom: 14, background: 'var(--ai3-green-soft)', borderColor: 'transparent' }}>
           <strong>{queue.data.lastRun.ranBy === 'nightly' ? 'Reconciled overnight' : 'Last run'}: {queue.data.lastRun.autoPosted} of {queue.data.lastRun.linesSeen} posted automatically at {queue.data.lastRun.threshold}%.</strong>{' '}
@@ -2423,7 +2533,12 @@ export function LedgerCompanySettings(_props: PluginPageProps) {
 
 const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, search: string) => boolean }> = [
   { label: 'Position', to: '/ledger', match: (p, s) => p.endsWith('/ledger') && !new URLSearchParams(s).get('tab') },
-  { label: 'Bank accounts', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && ['banks', 'reconcile'].includes(new URLSearchParams(s).get('tab') ?? '') },
+  { label: 'Bank accounts', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'banks' },
+  // Reconciliation had no entry here at all. The screen existed, and the only
+  // way to it was a button on Bank accounts that appears only when a line is
+  // already waiting — so the one person who most needed it, somebody wondering
+  // whether their bank matches their books, could not find it.
+  { label: 'Reconciliation', to: '/ledger?tab=reconcile', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'reconcile' },
   { label: 'Transactions', to: '/ledger?tab=transactions', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'transactions' },
   { label: 'Invoices', to: '/ledger?tab=invoices', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'invoices' },
   { label: 'Bills', to: '/ledger?tab=bills', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'bills' },

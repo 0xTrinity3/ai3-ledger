@@ -599,11 +599,33 @@ const plugin = definePlugin({
         out.push({ ...line, proposal: p });
       }
       const reconciled = await listStatementLines(ledger(), companyId, bankAccountId, { status: 'all', limit: 500 });
-      return { companyId, bank, queue: out, recent: reconciled.filter((l) => l.status !== 'unreconciled').slice(0, 50), lastRun: await lastRun(ledger(), companyId, bankAccountId) };
+      return {
+        companyId, bank, queue: out,
+        recent: reconciled.filter((l) => l.status !== 'unreconciled').slice(0, 50),
+        lastRun: await lastRun(ledger(), companyId, bankAccountId),
+      };
     });
     context.data.register('bank-rules', async (params) => {
       const companyId = await companyOf(params);
       return { companyId, rules: await listRules(ledger(), companyId) };
+    });
+    /**
+     * What the matcher is allowed to do on its own, and what it has learned.
+     *
+     * Both existed and neither was visible: the threshold was a constant in the
+     * nightly job, and the rules it learns from confirmations could be listed
+     * by this plugin but were shown on no screen. A rule that posts to somebody's
+     * books unattended and cannot be seen or switched off is the wrong kind of
+     * automation, however good its hit rate.
+     */
+    context.data.register('reconcile-settings', async (params) => {
+      const companyId = await companyOf(params);
+      const settings = await getSettings(ledger(), companyId);
+      return {
+        companyId,
+        auto: { enabled: settings.autoReconcile, threshold: settings.autoReconcileThreshold },
+        rules: await listRules(ledger(), companyId),
+      };
     });
 
     // Actions from the page. The board (a signed-in person) only; the host
@@ -921,28 +943,52 @@ const plugin = definePlugin({
       const threshold = Number(params['threshold'] ?? 90);
       return runReconciliation(ledger(), companyId, String(params['bankAccountId'] ?? ''), { threshold: Number.isFinite(threshold) ? threshold : 90, by: `board:${by}`, autoPost: params['autoPost'] !== false });
     });
+    context.actions.register('reconcile.settings', async (params, ctx) => {
+      boardOnly(ctx);
+      const companyId = await companyOf(params);
+      const enabled = params['enabled'] !== false;
+      const threshold = Number(params['threshold']);
+      const saved = await updateSettings(ledger(), companyId, {
+        autoReconcile: enabled,
+        ...(Number.isFinite(threshold) ? { autoReconcileThreshold: threshold } : {}),
+      });
+      return { enabled: saved.autoReconcile, threshold: saved.autoReconcileThreshold };
+    });
     context.actions.register('rule.toggle', async (params, ctx) => {
       boardOnly(ctx);
       await setRuleEnabled(ledger(), await companyOf(params), String(params['ruleId'] ?? ''), params['enabled'] !== false);
       return { ok: true };
     });
 
-    // Nightly: reconcile every account of every company above the threshold.
+    // Nightly: reconcile every account of every company that asked for it.
+    //
+    // The threshold used to be 90 here, in our source, for everybody — a policy
+    // about a stranger's books that they could neither see nor change. It comes
+    // off their own settings now, and a company that has turned auto-posting off
+    // is skipped entirely: the proposals are still computed, so the queue is
+    // ready in the morning, but nothing reaches the books without a person.
     context.jobs.register('reconcile', async (job) => {
       const companies = await context.companies.list({ limit: 500 });
       let posted = 0;
+      let proposedOnly = 0;
       for (const company of companies) {
         if (!(await jobAllowed(company.id, httpFetch, 'reconcile'))) continue;
         try {
+          const settings = await getSettings(ledger(), company.id);
           for (const bank of await listBankAccounts(ledger(), company.id)) {
-            const r = await runReconciliation(ledger(), company.id, bank.id, { threshold: 90, by: 'nightly' });
+            const r = await runReconciliation(ledger(), company.id, bank.id, {
+              threshold: settings.autoReconcileThreshold,
+              by: 'nightly',
+              autoPost: settings.autoReconcile,
+            });
             posted += r.autoPosted;
+            if (!settings.autoReconcile) proposedOnly += r.leftForReview;
           }
         } catch (err) {
           context.logger.error('ledger: nightly reconcile failed', { companyId: company.id, error: err instanceof Error ? err.message : String(err) });
         }
       }
-      context.logger.info('ledger: nightly reconcile done', { runId: job.runId, posted });
+      context.logger.info('ledger: nightly reconcile done', { runId: job.runId, posted, proposedOnly });
     });
 
     // M6: agent tools. The host validates params against the manifest schema

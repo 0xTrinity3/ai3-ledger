@@ -79,7 +79,7 @@ export type { FeedProvider, FeedInstitution } from './feeds.js';
 export { FEED_INSTITUTIONS, searchInstitutions, providerFor } from './feeds.js';
 
 export type { CompanySettings, PaymentKind, PaymentDetails, PaymentMethod, PaymentInstruction } from './settings.js';
-export { getSettings, updateSettings, markSummaryPublished, listPaymentMethods, createPaymentMethod, updatePaymentMethod, paymentInstructionsFor } from './settings.js';
+export { getSettings, updateSettings, markSummaryPublished, listPaymentMethods, createPaymentMethod, updatePaymentMethod, paymentInstructionsFor, MIN_AUTO_THRESHOLD, MAX_AUTO_THRESHOLD } from './settings.js';
 export type { CompanySummary, SummaryWindow } from './summary.js';
 export { companySummary } from './summary.js';
 export type { InvoicePayment } from './invoices.js';

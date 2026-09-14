@@ -30,16 +30,45 @@ export interface CompanySettings {
   leaderboardOptedAt: string | null;
   /** When the summary was last pushed to ai3.co. */
   summaryPublishedAt: string | null;
+  /**
+   * Whether reconciliation posts by itself, and how sure it has to be.
+   *
+   * This used to be a hard-coded 90% in the nightly job — a policy about
+   * somebody's books written into our source. It is theirs: off means nothing
+   * is ever posted without a person looking at it, and the threshold is how
+   * confident the matcher must be before it acts alone. The defaults are
+   * exactly what the job did before.
+   */
+  autoReconcile: boolean;
+  autoReconcileThreshold: number;
+}
+
+/** The narrowest and widest a threshold may be, and why. */
+export const MIN_AUTO_THRESHOLD = 50;   // below this the matcher is guessing
+export const MAX_AUTO_THRESHOLD = 100;  // 100 means only a certainty posts itself
+
+/**
+ * A threshold that is always a usable number.
+ *
+ * A missing column (an old row), a null, or something silly out of a form all
+ * become the default rather than a value the reconciler would act on. A
+ * threshold is a licence to post to somebody's books without asking: it is not
+ * a field to be lenient about.
+ */
+function clampThreshold(v: unknown): number {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 90;
+  return Math.min(MAX_AUTO_THRESHOLD, Math.max(MIN_AUTO_THRESHOLD, n));
 }
 
 export async function getSettings(db: LedgerDb, companyId: string, fallbackCurrency = 'USD'): Promise<CompanySettings> {
-  const rows = await db.sql.query<{ base_currency: string; legal_name: string | null; address: string | null; email: string | null; tax_id: string | null; invoice_footer: string | null; reply_to: string | null; ai3_key: string | null; ai3_origin: string | null; reminders_enabled: boolean; conversion_date: string | null; leaderboard_opt_in: boolean | null; leaderboard_opted_at: string | null; summary_published_at: string | null }>(
-    `SELECT base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin, reminders_enabled, conversion_date::text AS conversion_date, leaderboard_opt_in, leaderboard_opted_at::text AS leaderboard_opted_at, summary_published_at::text AS summary_published_at FROM ${table(db, 'company_settings')} WHERE company_id = $1`,
+  const rows = await db.sql.query<{ base_currency: string; legal_name: string | null; address: string | null; email: string | null; tax_id: string | null; invoice_footer: string | null; reply_to: string | null; ai3_key: string | null; ai3_origin: string | null; reminders_enabled: boolean; conversion_date: string | null; leaderboard_opt_in: boolean | null; leaderboard_opted_at: string | null; summary_published_at: string | null; auto_reconcile: boolean | null; auto_reconcile_threshold: number | null }>(
+    `SELECT base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin, reminders_enabled, conversion_date::text AS conversion_date, leaderboard_opt_in, leaderboard_opted_at::text AS leaderboard_opted_at, summary_published_at::text AS summary_published_at, auto_reconcile, auto_reconcile_threshold FROM ${table(db, 'company_settings')} WHERE company_id = $1`,
     [companyId],
   );
   const r = rows[0];
-  if (!r) return { companyId, baseCurrency: fallbackCurrency, legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null, remindersEnabled: false, conversionDate: null, leaderboardOptIn: false, leaderboardOptedAt: null, summaryPublishedAt: null };
-  return { companyId, baseCurrency: r.base_currency, legalName: r.legal_name, address: r.address, email: r.email, taxId: r.tax_id, invoiceFooter: r.invoice_footer, replyTo: r.reply_to, ai3Key: r.ai3_key, ai3Origin: r.ai3_origin, remindersEnabled: r.reminders_enabled === true, conversionDate: r.conversion_date, leaderboardOptIn: r.leaderboard_opt_in === true, leaderboardOptedAt: r.leaderboard_opted_at ? new Date(r.leaderboard_opted_at).toISOString() : null, summaryPublishedAt: r.summary_published_at ? new Date(r.summary_published_at).toISOString() : null };
+  if (!r) return { companyId, baseCurrency: fallbackCurrency, legalName: null, address: null, email: null, taxId: null, invoiceFooter: null, replyTo: null, ai3Key: null, ai3Origin: null, remindersEnabled: false, conversionDate: null, leaderboardOptIn: false, leaderboardOptedAt: null, summaryPublishedAt: null, autoReconcile: true, autoReconcileThreshold: 90 };
+  return { companyId, baseCurrency: r.base_currency, legalName: r.legal_name, address: r.address, email: r.email, taxId: r.tax_id, invoiceFooter: r.invoice_footer, replyTo: r.reply_to, ai3Key: r.ai3_key, ai3Origin: r.ai3_origin, remindersEnabled: r.reminders_enabled === true, conversionDate: r.conversion_date, leaderboardOptIn: r.leaderboard_opt_in === true, leaderboardOptedAt: r.leaderboard_opted_at ? new Date(r.leaderboard_opted_at).toISOString() : null, summaryPublishedAt: r.summary_published_at ? new Date(r.summary_published_at).toISOString() : null, autoReconcile: r.auto_reconcile !== false, autoReconcileThreshold: clampThreshold(r.auto_reconcile_threshold) };
 }
 
 export async function updateSettings(db: LedgerDb, companyId: string, input: Partial<Omit<CompanySettings, 'companyId'>>): Promise<CompanySettings> {
@@ -50,13 +79,16 @@ export async function updateSettings(db: LedgerDb, companyId: string, input: Par
   const optIn = next.leaderboardOptIn === true;
   // The opt-in moment is kept from the first time it was switched on in this stretch; switching off clears it.
   const optedAt = optIn ? (current.leaderboardOptIn ? current.leaderboardOptedAt : new Date().toISOString()) : null;
+  const autoReconcile = next.autoReconcile !== false;
+  const autoThreshold = clampThreshold(next.autoReconcileThreshold);
   await db.sql.execute(
-    `INSERT INTO ${table(db, 'company_settings')} (company_id, base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin, reminders_enabled, conversion_date, leaderboard_opt_in, leaderboard_opted_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::boolean, $12::date, $13::boolean, $14::timestamptz)
+    `INSERT INTO ${table(db, 'company_settings')} (company_id, base_currency, legal_name, address, email, tax_id, invoice_footer, reply_to, ai3_key, ai3_origin, reminders_enabled, conversion_date, leaderboard_opt_in, leaderboard_opted_at, auto_reconcile, auto_reconcile_threshold)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::boolean, $12::date, $13::boolean, $14::timestamptz, $15::boolean, $16::integer)
      ON CONFLICT (company_id) DO UPDATE SET base_currency = EXCLUDED.base_currency, legal_name = EXCLUDED.legal_name, address = EXCLUDED.address,
        email = EXCLUDED.email, tax_id = EXCLUDED.tax_id, invoice_footer = EXCLUDED.invoice_footer, reply_to = EXCLUDED.reply_to, ai3_key = EXCLUDED.ai3_key, ai3_origin = EXCLUDED.ai3_origin, reminders_enabled = EXCLUDED.reminders_enabled, conversion_date = EXCLUDED.conversion_date,
-       leaderboard_opt_in = EXCLUDED.leaderboard_opt_in, leaderboard_opted_at = EXCLUDED.leaderboard_opted_at, updated_at = now()`,
-    [companyId, base, clean(next.legalName, 200), clean(next.address, 500), clean(next.email, 200), clean(next.taxId, 100), clean(next.invoiceFooter, 1000), clean(next.replyTo, 200), clean(next.ai3Key, 200), clean(next.ai3Origin, 200), next.remindersEnabled === true, next.conversionDate && /^\d{4}-\d{2}-\d{2}$/.test(next.conversionDate) ? next.conversionDate : null, optIn, optedAt],
+       leaderboard_opt_in = EXCLUDED.leaderboard_opt_in, leaderboard_opted_at = EXCLUDED.leaderboard_opted_at,
+       auto_reconcile = EXCLUDED.auto_reconcile, auto_reconcile_threshold = EXCLUDED.auto_reconcile_threshold, updated_at = now()`,
+    [companyId, base, clean(next.legalName, 200), clean(next.address, 500), clean(next.email, 200), clean(next.taxId, 100), clean(next.invoiceFooter, 1000), clean(next.replyTo, 200), clean(next.ai3Key, 200), clean(next.ai3Origin, 200), next.remindersEnabled === true, next.conversionDate && /^\d{4}-\d{2}-\d{2}$/.test(next.conversionDate) ? next.conversionDate : null, optIn, optedAt, autoReconcile, autoThreshold],
   );
   return getSettings(db, companyId);
 }
