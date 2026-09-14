@@ -123,6 +123,7 @@ import {
   listStreams,
   openStream,
   pauseStream,
+  resumeStream,
   tick as streamTick,
   withdraw as streamWithdraw,
 
@@ -850,8 +851,13 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
       case 'streams.tick':
         return json(200, await streamTick(l, companyId, id, { createdBy: who(input) }));
       case 'streams.pause': {
+        // One route for both directions: pausing and resuming are the same
+        // decision seen from either side, and a second path for the other half
+        // is a second thing to keep in step.
         if (!board) return bad('Only the board can pause a stream', 403);
-        return json(200, await pauseStream(l, companyId, id));
+        return json(200, body['resume'] === true
+          ? await resumeStream(l, companyId, id)
+          : await pauseStream(l, companyId, id));
       }
       case 'streams.cancel': {
         if (!board) return bad('Only the board can cancel a stream', 403);
