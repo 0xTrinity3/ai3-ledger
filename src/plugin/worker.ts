@@ -59,6 +59,9 @@ import {
   importChart,
   parseTrialBalanceCsv,
   importTrialBalance,
+  parseDocumentsCsv,
+  previewDocuments,
+  importDocuments,
   standingConversion,
   undoTrialBalance,
   getPeriod,
@@ -682,6 +685,28 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
             lines: parsed.lines,
             createdBy: who(input),
             plugToRetainedEarnings: body['plugToRetainedEarnings'] === true,
+          }),
+        });
+      }
+      case 'import.documents': {
+        // Invoices and bills out of a spreadsheet, on the same read → show →
+        // apply path as the chart and the opening balances. A preview writes
+        // nothing, which is what lets the site render the rows and the control
+        // account difference before anybody commits to them.
+        if (!board) return bad('Only the board can import invoices and bills', 403);
+        const kind = body['kind'] === 'bill' ? 'bill' : 'invoice';
+        const parsed = parseDocumentsCsv(String(body['csv'] ?? ''), kind, {});
+        const conversionDate = body['conversionDate'] ? String(body['conversionDate']) : null;
+        const preview = await previewDocuments(l, companyId, parsed, { conversionDate });
+        if (body['preview'] === true) return json(200, { parsed, preview });
+        return json(200, {
+          parsed,
+          preview,
+          result: await importDocuments(l, companyId, parsed, {
+            conversionDate,
+            cashAccountCode: body['cashAccountCode'] ? String(body['cashAccountCode']) : null,
+            defaultAccountCode: body['defaultAccountCode'] ? String(body['defaultAccountCode']) : null,
+            createdBy: who(input),
           }),
         });
       }

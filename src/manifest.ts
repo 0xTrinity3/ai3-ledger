@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.18.0',
+  version: '0.19.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -181,6 +181,7 @@ const manifest: PaperclipPluginManifestV1 = {
 
     { routeKey: 'import.chart', method: 'POST', path: '/import/chart', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'import.opening', method: 'POST', path: '/import/opening-balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'import.documents', method: 'POST', path: '/import/documents', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'import.standing', method: 'GET', path: '/import/opening-balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'import.undo', method: 'POST', path: '/import/opening-balances/undo', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
 

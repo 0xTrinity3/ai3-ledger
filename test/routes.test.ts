@@ -43,7 +43,7 @@ describe('plugin api routes', () => {
       'banks.list', 'banks.create', 'banks.lines', 'banks.import',
       'reconcile.run', 'reconcile.decide', 'reconcile.rules', 'reconcile.rule',
       'settings.get', 'settings.update', 'payments.list', 'payments.create',
-      'import.chart', 'import.opening', 'import.standing', 'import.undo',
+      'import.chart', 'import.opening', 'import.standing', 'import.undo', 'import.documents',
     ]) {
       expect(keys.has(needed), `${needed} is not published`).toBe(true);
     }
