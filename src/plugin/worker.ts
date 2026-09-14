@@ -30,6 +30,7 @@ import {
   issueInvoice,
   recordPayment,
   writeOffInvoice,
+  creditInvoice,
   voidInvoice,
   type InvoiceStatus,
   listPeriods,
@@ -395,6 +396,18 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
           createdBy: who(input),
         });
         return json(200, inv);
+      }
+      case 'invoices.credit': {
+        // A credit note: the income comes back out for a stated amount, with
+        // the reason on the record. Not a payment, and never posted as one.
+        if (!board) return bad('Only the board can credit an invoice', 403);
+        return json(200, await creditInvoice(l, companyId, id, {
+          amountMinor: String(body['amountMinor'] ?? ''),
+          reason: String(body['reason'] ?? ''),
+          ...(typeof body['reference'] === 'string' ? { reference: body['reference'] } : {}),
+          ...(typeof body['occurredAt'] === 'string' ? { occurredAt: body['occurredAt'] } : {}),
+          createdBy: who(input),
+        }));
       }
       case 'invoices.writeoff': {
         if (!board) return bad('Only the board can write off an invoice', 403);

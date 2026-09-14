@@ -64,6 +64,10 @@ export interface InvoicePayment {
   baseMinor: string;
   reference: string | null;
   transactionId: string | null;
+  /** `payment` is money that arrived. `credit` is a credit note: the income comes back out and no cash moved. */
+  kind: 'payment' | 'credit';
+  /** Why the credit was issued. Always set for a credit, never for a payment. */
+  reason: string | null;
 }
 
 export interface Invoice {
@@ -90,6 +94,8 @@ export interface Invoice {
   /** Imported from the previous system and dated before the conversion date: issued without posting. */
   conversion: boolean;
   paidMinor: string;
+  /** Reduced by credit notes rather than by money arriving. */
+  creditedMinor: string;
   outstandingMinor: string;
   paymentMethods: PaymentInstruction[];
   notes: string | null;
@@ -107,6 +113,8 @@ export interface Invoice {
 const ISSUE_REF = (invoiceId: string) => `invoice:${invoiceId}`;
 const PAYMENT_REF = (invoiceId: string, ref: string) => `payment:${invoiceId}:${ref}`;
 const WRITEOFF_REF = (invoiceId: string) => `writeoff:${invoiceId}`;
+/** A credit note's own source ref, so the drill-down from a P&L figure lands on the credit rather than on the invoice. */
+const CREDIT_REF = (invoiceId: string, ref: string) => `credit:${invoiceId}:${ref}`;
 
 // ---------------------------------------------------------------------------
 // Rates: decimal strings, ten places, integer arithmetic only.
@@ -337,6 +345,7 @@ interface InvoiceRow {
   opening_paid_minor: unknown;
   conversion: boolean;
   paid_minor: unknown;
+  credited_minor?: unknown;
   payment_methods: unknown;
   notes: string | null;
   hosted_token: string | null;
@@ -361,7 +370,8 @@ const INVOICE_SELECT = (db: LedgerDb) => `
          i.issued_at::text AS issued_at, i.due_at::text AS due_at, i.reference, i.subtotal_minor, i.tax_minor, i.total_minor, i.base_total_minor, i.opening_paid_minor, i.conversion, i.payment_methods, i.notes,
          i.hosted_token, i.hosted_url, i.hosted_at::text AS hosted_at, i.sent_at::text AS sent_at, i.sent_to, i.opened_at::text AS opened_at, i.open_count, i.reminder_stage, i.last_reminder_at::text AS last_reminder_at,
          i.subject_work_ref, i.subject_goal_ref, i.subject_agent_ref, i.created_by, i.created_at::text AS created_at,
-         COALESCE((SELECT SUM(p.amount_minor) FROM ${table(db, 'invoice_payments')} p WHERE p.invoice_id = i.id AND p.transaction_id IS NOT NULL), 0) AS paid_minor
+         COALESCE((SELECT SUM(p.amount_minor) FROM ${table(db, 'invoice_payments')} p WHERE p.invoice_id = i.id AND p.transaction_id IS NOT NULL AND p.kind = 'payment'), 0) AS paid_minor,
+         COALESCE((SELECT SUM(p.amount_minor) FROM ${table(db, 'invoice_payments')} p WHERE p.invoice_id = i.id AND p.transaction_id IS NOT NULL AND p.kind = 'credit'), 0) AS credited_minor
     FROM ${table(db, 'invoices')} i JOIN ${table(db, 'customers')} c ON c.id = i.customer_id`;
 
 export async function getInvoice(db: LedgerDb, companyId: string, id: string): Promise<Invoice | null> {
@@ -373,15 +383,15 @@ export async function getInvoice(db: LedgerDb, companyId: string, id: string): P
        FROM ${table(db, 'invoice_lines')} WHERE invoice_id = $1::uuid ORDER BY position`,
     [id],
   );
-  const payments = await db.sql.query<{ id: string; occurred_at: string; amount_minor: unknown; rate_to_base: string; base_minor: unknown; reference: string | null; transaction_id: string | null }>(
-    `SELECT id, occurred_at::text AS occurred_at, amount_minor, rate_to_base::text AS rate_to_base, base_minor, reference, transaction_id
+  const payments = await db.sql.query<{ id: string; occurred_at: string; amount_minor: unknown; rate_to_base: string; base_minor: unknown; reference: string | null; transaction_id: string | null; kind: string | null; reason: string | null }>(
+    `SELECT id, occurred_at::text AS occurred_at, amount_minor, rate_to_base::text AS rate_to_base, base_minor, reference, transaction_id, kind, reason
        FROM ${table(db, 'invoice_payments')} WHERE invoice_id = $1::uuid AND transaction_id IS NOT NULL ORDER BY occurred_at`,
     [id],
   );
   return invoiceFromRow(
     r,
     lines.map((l) => ({ position: Number(l.position), description: l.description, quantity: String(l.quantity), unitAmountMinor: fromMinor(toMinor(l.unit_amount_minor)), amountMinor: fromMinor(toMinor(l.amount_minor)), taxMinor: fromMinor(toMinor(l.tax_minor ?? 0)), accountCode: l.account_code })),
-    payments.map((p) => ({ id: p.id, occurredAt: p.occurred_at, amountMinor: fromMinor(toMinor(p.amount_minor)), rateToBase: p.rate_to_base, baseMinor: fromMinor(toMinor(p.base_minor)), reference: p.reference, transactionId: p.transaction_id })),
+    payments.map((p) => ({ id: p.id, occurredAt: p.occurred_at, amountMinor: fromMinor(toMinor(p.amount_minor)), rateToBase: p.rate_to_base, baseMinor: fromMinor(toMinor(p.base_minor)), reference: p.reference, transactionId: p.transaction_id, kind: p.kind === 'credit' ? 'credit' : 'payment', reason: p.reason ?? null })),
   );
 }
 
@@ -402,8 +412,12 @@ export async function listInvoices(db: LedgerDb, companyId: string, opts: { stat
 function invoiceFromRow(r: InvoiceRow, lines: InvoiceLine[], payments: InvoicePayment[]): Invoice {
   const total = toMinor(r.total_minor);
   const paid = toMinor(r.paid_minor);
+  const credited = toMinor(r.credited_minor ?? 0);
   const opening = toMinor(r.opening_paid_minor ?? 0);
-  const outstanding = r.status === 'written_off' || r.status === 'void' || r.status === 'draft' ? 0n : total - opening - paid;
+  // A credit reduces what is owed exactly as a payment does. It is kept apart
+  // from `paid` so that "how much did this customer actually send us" stays a
+  // question the books can answer.
+  const outstanding = r.status === 'written_off' || r.status === 'void' || r.status === 'draft' ? 0n : total - opening - paid - credited;
   let methods: PaymentInstruction[] = [];
   try { methods = typeof r.payment_methods === 'string' ? (JSON.parse(r.payment_methods) as PaymentInstruction[]) : ((r.payment_methods as PaymentInstruction[]) ?? []); } catch { methods = []; }
   return {
@@ -428,6 +442,7 @@ function invoiceFromRow(r: InvoiceRow, lines: InvoiceLine[], payments: InvoicePa
     openingPaidMinor: fromMinor(opening),
     conversion: r.conversion === true,
     paidMinor: fromMinor(paid),
+    creditedMinor: fromMinor(credited),
     outstandingMinor: fromMinor(outstanding < 0n ? 0n : outstanding),
     paymentMethods: Array.isArray(methods) ? methods : [],
     notes: r.notes,
@@ -590,6 +605,76 @@ export async function recordPayment(
   if (!after) throw new LedgerError('invoice vanished while paying', 'invalid');
   const next: InvoiceStatus = toMinor(after.outstandingMinor) === 0n ? 'paid' : 'part_paid';
   await setStatus(db, companyId, id, ['issued', 'part_paid'], next);
+  return (await getInvoice(db, companyId, id)) ?? after;
+}
+
+/**
+ * Credit part (or all) of an invoice.
+ *
+ * A credit note is the honest way to say "we billed you too much": the income
+ * comes back out and the receivable clears, exactly as a write-off does, but
+ * for a stated amount and with the reason on the record. What it is *not* is a
+ * payment — no cash moved — which is why the relief row carries its kind and
+ * why `paidMinor` still answers "how much did this customer actually send us".
+ *
+ * Idempotent on `reference`, because the thing that issues these is usually a
+ * machine acting on a ruling, and a retry must not credit twice.
+ */
+export async function creditInvoice(
+  db: LedgerDb,
+  companyId: string,
+  id: string,
+  input: { amountMinor: Minor | number | string; reason: string; reference?: string; occurredAt?: Date | string; createdBy?: string; incomeAccountCode?: string },
+): Promise<Invoice> {
+  const inv = await getInvoice(db, companyId, id);
+  if (!inv) throw new LedgerError(`invoice ${id} not found for company ${companyId}`, 'invalid');
+  if (inv.status !== 'issued' && inv.status !== 'part_paid') {
+    throw new LedgerError(`invoice ${inv.number} is ${inv.status}; only an issued invoice can be credited`, 'invalid');
+  }
+  const amount = assertPositiveMinor(input.amountMinor, 'credit amount');
+  const outstanding = toMinor(inv.outstandingMinor);
+  if (amount > outstanding) {
+    throw new LedgerError(`credit ${fromMinor(amount)} exceeds the ${fromMinor(outstanding)} outstanding on ${inv.number}`, 'invalid');
+  }
+  const reason = String(input.reason ?? '').trim();
+  if (reason.length < 3) throw new LedgerError('a credit note needs a reason', 'invalid');
+
+  const issueRate = parseRate(inv.rateToBase);
+  const reliefBase = toBase(amount, issueRate);
+  const ref = (input.reference ?? '').trim() || newId();
+  const occurredAt = toIso(input.occurredAt ?? new Date());
+  const creditId = newId();
+  const inserted = await db.sql.execute(
+    `INSERT INTO ${table(db, 'invoice_payments')} (id, company_id, invoice_id, occurred_at, amount_minor, rate_to_base, base_minor, reference, kind, reason)
+     VALUES ($1::uuid, $2, $3::uuid, $4::timestamptz, $5::bigint, $6::numeric, $7::bigint, $8, 'credit', $9)
+     ON CONFLICT (invoice_id, reference) DO NOTHING`,
+    [creditId, companyId, inv.id, occurredAt, fromMinor(amount), rateString(issueRate), fromMinor(reliefBase), ref, reason.slice(0, 500)],
+  );
+  if (inserted.rowCount === 0) return inv; // same reference twice: a no-op
+
+  const r = await postTransaction(db, {
+    companyId,
+    occurredAt,
+    description: `Credit note on ${inv.number} · ${inv.customerName} · ${reason.slice(0, 200)}`,
+    sourcePlatform: 'manual',
+    sourceKind: 'invoice',
+    sourceRef: CREDIT_REF(inv.id, ref),
+    currency: inv.baseCurrency,
+    createdBy: input.createdBy ?? 'board',
+    entries: [
+      { accountCode: input.incomeAccountCode ?? ACCOUNT.SERVICE_INCOME, direction: 'debit', amountMinor: reliefBase, subject: inv.subject },
+      { accountCode: ACCOUNT.RECEIVABLES, direction: 'credit', amountMinor: reliefBase, subject: inv.subject },
+    ],
+  });
+  await db.sql.execute(`UPDATE ${table(db, 'invoice_payments')} SET transaction_id = $2::uuid WHERE id = $1::uuid`, [creditId, r.transactionId]);
+
+  const after = await getInvoice(db, companyId, id);
+  if (!after) throw new LedgerError('invoice vanished while crediting', 'invalid');
+  // Credited to nothing: the invoice is settled, and `written_off` is the
+  // truthful terminal state — nobody paid it, it was given up.
+  if (toMinor(after.outstandingMinor) === 0n) {
+    await setStatus(db, companyId, id, ['issued', 'part_paid'], toMinor(after.paidMinor) > 0n ? 'paid' : 'written_off');
+  }
   return (await getInvoice(db, companyId, id)) ?? after;
 }
 

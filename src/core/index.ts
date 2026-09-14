@@ -52,7 +52,7 @@ export {
   listInvoices,
   issueInvoice,
   recordPayment,
-  writeOffInvoice,
+  creditInvoice, writeOffInvoice,
   voidInvoice,
   receivablesOutstanding,
 } from './invoices.js';
