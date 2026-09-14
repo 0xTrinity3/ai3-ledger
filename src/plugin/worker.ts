@@ -116,6 +116,15 @@ import {
   release as meterRelease,
   reserve as meterReserve,
   statement as meterStatement,
+  accrue as streamAccrue,
+  cancelStream,
+  getStream,
+  invoiceStatement,
+  listStreams,
+  openStream,
+  pauseStream,
+  tick as streamTick,
+  withdraw as streamWithdraw,
 
 } from '../core/index.js';
 import { paperclipCostSource } from './cost-source.js';
@@ -784,6 +793,81 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
           from: String(input.query['from'] ?? ''),
           to: String(input.query['to'] ?? ''),
         }));
+
+      case 'meter.invoice': {
+        if (!board) return bad('Only the board can issue a statement invoice', 403);
+        return json(200, await invoiceStatement(l, companyId, {
+          holder: String(body['holder'] ?? ''),
+          customerId: String(body['customerId'] ?? ''),
+          currency: String(body['currency'] ?? 'USD'),
+          from: String(body['from'] ?? ''),
+          to: String(body['to'] ?? ''),
+          prepaid: body['prepaid'] === true,
+          ...(typeof body['dueAt'] === 'string' ? { dueAt: body['dueAt'] } : {}),
+          createdBy: who(input),
+        }));
+      }
+
+      // ---- streams ---------------------------------------------------------
+      //
+      // An agent may earn against a stream somebody opened for it — accruing
+      // and ticking are the work reporting itself — but only the board opens
+      // one, stops one, or moves money out of it.
+      case 'streams.list':
+        return json(200, {
+          companyId,
+          streams: await listStreams(l, companyId, {
+            ...(input.query['recipient'] ? { recipient: String(input.query['recipient']) } : {}),
+            ...(input.query['payer'] ? { payer: String(input.query['payer']) } : {}),
+            ...(input.query['status'] ? { status: String(input.query['status']) as 'active' | 'paused' | 'cancelled' | 'ended' } : {}),
+          }),
+        });
+      case 'streams.open': {
+        if (!board) return bad('Only the board can open a stream', 403);
+        return json(200, await openStream(l, companyId, {
+          payer: String(body['payer'] ?? ''),
+          recipient: String(body['recipient'] ?? ''),
+          kind: String(body['kind'] ?? 'usage') as 'usage' | 'time' | 'output' | 'outcome',
+          meter: String(body['meter'] ?? ''),
+          currency: String(body['currency'] ?? 'USD'),
+          ...(body['rateMinor'] === undefined ? {} : { rateMinor: String(body['rateMinor']) }),
+          ...(body['ratePct'] === undefined ? {} : { ratePct: Number(body['ratePct']) }),
+          capMinor: String(body['capMinor'] ?? '0'),
+          ...(typeof body['capPeriod'] === 'string' ? { capPeriod: body['capPeriod'] as 'total' | 'day' | 'month' } : {}),
+          ...(typeof body['accountCode'] === 'string' ? { accountCode: body['accountCode'] } : {}),
+          internal: body['internal'] === true,
+          ...(body['noticeSeconds'] === undefined ? {} : { noticeSeconds: Number(body['noticeSeconds']) }),
+          createdBy: who(input),
+        }));
+      }
+      case 'streams.accrue':
+        return json(200, await streamAccrue(l, companyId, id, {
+          ...(body['quantity'] === undefined ? {} : { quantity: String(body['quantity']) }),
+          ...(body['valueMinor'] === undefined ? {} : { valueMinor: String(body['valueMinor']) }),
+          ...(typeof body['reference'] === 'string' ? { reference: body['reference'] } : {}),
+          createdBy: who(input),
+        }));
+      case 'streams.tick':
+        return json(200, await streamTick(l, companyId, id, { createdBy: who(input) }));
+      case 'streams.pause': {
+        if (!board) return bad('Only the board can pause a stream', 403);
+        return json(200, await pauseStream(l, companyId, id));
+      }
+      case 'streams.cancel': {
+        if (!board) return bad('Only the board can cancel a stream', 403);
+        return json(200, await cancelStream(l, companyId, id, {
+          ...(typeof body['reason'] === 'string' ? { reason: body['reason'] } : {}),
+          immediate: body['immediate'] === true,
+        }));
+      }
+      case 'streams.withdraw': {
+        if (!board) return bad('Only the board can settle a stream', 403);
+        return json(200, await streamWithdraw(l, companyId, id, {
+          ...(body['amountMinor'] === undefined ? {} : { amountMinor: String(body['amountMinor']) }),
+          ...(typeof body['cashAccountCode'] === 'string' ? { cashAccountCode: body['cashAccountCode'] } : {}),
+          createdBy: who(input),
+        }));
+      }
 
       case 'import.documents': {
         // Invoices and bills out of a spreadsheet, on the same read → show →

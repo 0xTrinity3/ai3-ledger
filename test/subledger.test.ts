@@ -218,3 +218,50 @@ describe('the statement', () => {
     expect(s.lines[1]!.sku).toBe('search');
   });
 });
+
+describe('the monthly invoice', () => {
+  it('is one document for a month of continuous consumption', async () => {
+    const { createCustomer, invoiceStatement, getInvoice, listInvoices } = await import('../src/core/index.js');
+    const customer = await createCustomer(db, CO, { name: 'Acme', email: 'ap@acme.example' });
+    await fund(db, CO, { holder: 'customer:acme', currency: 'EUR', amountMinor: '10000', post: true });
+    for (let i = 0; i < 50; i += 1) {
+      await record(db, CO, {
+        holder: 'customer:acme', currency: 'EUR', amountMinor: '8', quantity: '1000',
+        counterparty: 'anthropic', sku: 'claude-opus-5', occurredAt: at(9), reference: `m-${i}`,
+      });
+    }
+    await record(db, CO, {
+      holder: 'customer:acme', currency: 'EUR', amountMinor: '100',
+      counterparty: 'exa', sku: 'search', occurredAt: at(11), reference: 'search-1',
+    });
+
+    const r = await invoiceStatement(db, CO, {
+      holder: 'customer:acme', customerId: customer.id, currency: 'EUR', ...DAY, prepaid: true,
+    });
+    expect(r.totalMinor).toBe('500');
+    expect(r.lines).toBe(2, );
+    expect(r.number).toMatch(/^INV-/);
+
+    // Fifty-one actions, one invoice, two lines — and it is already settled,
+    // because they paid before they spent it.
+    const inv = await getInvoice(db, CO, r.invoiceId!);
+    expect(inv!.lines.length).toBe(2);
+    expect(inv!.status).toBe('paid');
+    expect(inv!.outstandingMinor).toBe('0');
+    expect(inv!.lines[0]!.description).toMatch(/anthropic · claude-opus-5 · 50 events/);
+
+    // Running the month again bills once.
+    const again = await invoiceStatement(db, CO, { holder: 'customer:acme', customerId: customer.id, currency: 'EUR', ...DAY, prepaid: true });
+    expect(again.alreadyBilled).toBe(true);
+    expect(again.invoiceId).toBe(r.invoiceId);
+    expect((await listInvoices(db, CO, {})).length).toBe(1);
+  });
+
+  it('a month with nothing in it is not a document', async () => {
+    const { createCustomer, invoiceStatement } = await import('../src/core/index.js');
+    const customer = await createCustomer(db, CO, { name: 'Quiet' });
+    const r = await invoiceStatement(db, CO, { holder: 'customer:quiet', customerId: customer.id, currency: 'EUR', ...DAY });
+    expect(r.invoiceId).toBe(null);
+    expect(r.totalMinor).toBe('0');
+  });
+});

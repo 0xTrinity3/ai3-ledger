@@ -42,6 +42,25 @@ import { LedgerError, postTransaction, resolveCode, type EntryInput, type Subjec
 
 export type MeterKind = 'usage' | 'time' | 'output' | 'outcome';
 export type MeterStatus = 'reserved' | 'captured' | 'released' | 'void';
+/**
+ * Where the money for an event comes from.
+ *
+ * `balance` is money this company is holding for somebody else: they put it in,
+ * this draws it down, and the reservation machinery stops two agents spending
+ * the same euro. The credit side is a liability, because it is their money.
+ *
+ * `prepaid` is this company's own resource, bought in advance — model credits
+ * it already owns. There is nothing to reserve against because nobody else has
+ * a claim on it, and the credit side is the asset being consumed.
+ *
+ * `accrual` is earned: nobody has paid anything yet, and what the event creates
+ * is a debt to whoever did the work.
+ *
+ * All three are the same event with the same detail. They differ only in what
+ * stands behind the expense, which is exactly why it has to be recorded rather
+ * than inferred later.
+ */
+export type MeterFunding = 'balance' | 'accrual' | 'prepaid';
 
 export interface MeterEvent {
   id: string;
@@ -66,6 +85,8 @@ export interface MeterEvent {
   releasedAt: string | null;
   reference: string | null;
   batchId: string | null;
+  funding: MeterFunding;
+  streamId: string | null;
 }
 
 export interface Balance {
@@ -109,6 +130,8 @@ function rowToEvent(r: Record<string, unknown>): MeterEvent {
     releasedAt: (r['released_at'] as string | null) ?? null,
     reference: (r['reference'] as string | null) ?? null,
     batchId: (r['batch_id'] as string | null) ?? null,
+    funding: (r['funding'] as MeterFunding) ?? 'balance',
+    streamId: (r['stream_id'] as string | null) ?? null,
   };
 }
 
@@ -261,11 +284,14 @@ export async function reserve(
     occurredAt?: Date | string;
     reference?: string | null;
     createdBy?: string;
+    funding?: MeterFunding;
+    streamId?: string | null;
   },
 ): Promise<MeterEvent> {
   assertCurrency(input.currency);
   const max = toMinor(input.maxMinor);
   if (max <= 0n) throw new LedgerError('a reservation has to be a positive amount', 'invalid');
+  const funding: MeterFunding = input.funding ?? 'balance';
 
   // A retry with the same reference gets the reservation it already has.
   if (input.reference) {
@@ -273,12 +299,17 @@ export async function reserve(
     if (seen) return seen;
   }
 
-  const held = await db.sql.execute(
-    `UPDATE ${table(db, 'meter_balances')} SET reserved_minor = reserved_minor + $4::bigint, updated_at = now()
-      WHERE company_id = $1 AND holder = $2 AND currency = $3
-        AND available_minor - reserved_minor >= $4::bigint`,
-    [companyId, input.holder, input.currency, fromMinor(max)],
-  );
+  // Only money held for somebody else is reserved. An accrual is work being
+  // earned, and a prepaid resource is already this company's own: neither has
+  // a third party whose balance could be spent twice.
+  const held = funding !== 'balance'
+    ? { rowCount: 1 }
+    : await db.sql.execute(
+      `UPDATE ${table(db, 'meter_balances')} SET reserved_minor = reserved_minor + $4::bigint, updated_at = now()
+        WHERE company_id = $1 AND holder = $2 AND currency = $3
+          AND available_minor - reserved_minor >= $4::bigint`,
+      [companyId, input.holder, input.currency, fromMinor(max)],
+    );
   if (held.rowCount === 0) {
     const b = await balanceFor(db, companyId, input.holder, input.currency);
     throw new LedgerError(
@@ -292,8 +323,8 @@ export async function reserve(
   await db.sql.execute(
     `INSERT INTO ${table(db, 'meter_events')}
        (id, company_id, holder, status, kind, counterparty, internal, sku, amount_minor, reserved_minor, currency,
-        account_code, agent_ref, project_ref, goal_ref, work_ref, customer, occurred_at, reference, created_by)
-     VALUES ($1::uuid, $2, $3, 'reserved', $4, $5, $6, $7, 0, $8::bigint, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz, $17, $18)`,
+        account_code, agent_ref, project_ref, goal_ref, work_ref, customer, occurred_at, reference, created_by, funding, stream_id)
+     VALUES ($1::uuid, $2, $3, 'reserved', $4, $5, $6, $7, 0, $8::bigint, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz, $17, $18, $19, $20::uuid)`,
     [
       id, companyId, input.holder, input.kind ?? 'usage', input.counterparty ?? null, input.internal === true,
       input.sku ?? null, fromMinor(max), input.currency,
@@ -301,6 +332,7 @@ export async function reserve(
       s.agent ?? null, s.project ?? null, s.goal ?? null, s.work ?? null,
       input.customer ?? null,
       toIso(input.occurredAt ?? new Date()), input.reference ?? null, input.createdBy ?? 'system',
+      funding, input.streamId ?? null,
     ],
   );
   const made = await getEvent(db, companyId, id);
@@ -340,12 +372,15 @@ export async function capture(
   if (passThrough > spent) throw new LedgerError('more cannot be owed on to somebody else than was collected', 'invalid');
 
   // The balance falls by what was spent, and the whole reservation is let go.
-  await db.sql.execute(
-    `UPDATE ${table(db, 'meter_balances')}
-        SET available_minor = available_minor - $4::bigint, reserved_minor = reserved_minor - $5::bigint, updated_at = now()
-      WHERE company_id = $1 AND holder = $2 AND currency = $3`,
-    [companyId, e.holder, e.currency, fromMinor(spent), fromMinor(held)],
-  );
+  // An accrual touches no balance: what it creates is a debt, not a drawdown.
+  if (e.funding === 'balance') {
+    await db.sql.execute(
+      `UPDATE ${table(db, 'meter_balances')}
+          SET available_minor = available_minor - $4::bigint, reserved_minor = reserved_minor - $5::bigint, updated_at = now()
+        WHERE company_id = $1 AND holder = $2 AND currency = $3`,
+      [companyId, e.holder, e.currency, fromMinor(spent), fromMinor(held)],
+    );
+  }
   await db.sql.execute(
     `UPDATE ${table(db, 'meter_events')}
         SET status = 'captured', amount_minor = $3::bigint, reserved_minor = 0, pass_through_minor = $4::bigint,
@@ -367,11 +402,13 @@ export async function release(db: LedgerDb, companyId: string, eventId: string, 
   if (!e) throw new LedgerError(`no subledger event ${eventId}`, 'invalid');
   if (e.status === 'released' || e.status === 'void') return e;
   if (e.status !== 'reserved') throw new LedgerError(`that event is ${e.status}; only a reservation can be released`, 'invalid');
-  await db.sql.execute(
-    `UPDATE ${table(db, 'meter_balances')} SET reserved_minor = reserved_minor - $4::bigint, updated_at = now()
-      WHERE company_id = $1 AND holder = $2 AND currency = $3`,
-    [companyId, e.holder, e.currency, e.reservedMinor],
-  );
+  if (e.funding === 'balance') {
+    await db.sql.execute(
+      `UPDATE ${table(db, 'meter_balances')} SET reserved_minor = reserved_minor - $4::bigint, updated_at = now()
+        WHERE company_id = $1 AND holder = $2 AND currency = $3`,
+      [companyId, e.holder, e.currency, e.reservedMinor],
+    );
+  }
   await db.sql.execute(
     `UPDATE ${table(db, 'meter_events')} SET status = 'released', reserved_minor = 0, released_at = $3::timestamptz WHERE company_id = $1 AND id = $2::uuid`,
     [companyId, eventId, toIso(at)],
@@ -389,7 +426,7 @@ export async function release(db: LedgerDb, companyId: string, eventId: string, 
 export async function record(
   db: LedgerDb,
   companyId: string,
-  input: Parameters<typeof reserve>[2] & { amountMinor: Minor | number | string; passThroughMinor?: Minor | number | string; quantity?: number | string | null; unitAmountMinor?: Minor | number | string | null },
+  input: Omit<Parameters<typeof reserve>[2], 'maxMinor'> & { amountMinor: Minor | number | string; passThroughMinor?: Minor | number | string; quantity?: number | string | null; unitAmountMinor?: Minor | number | string | null },
 ): Promise<MeterEvent> {
   const amount = toMinor(input.amountMinor);
   const reserved = await reserve(db, companyId, { ...input, maxMinor: amount });
@@ -461,7 +498,7 @@ export interface AggregateResult {
   events: number;
   amountMinor: string;
   skippedInternal: number;
-  groups: Array<{ accountCode: string; counterparty: string | null; amountMinor: string; passThroughMinor: string; events: number }>;
+  groups: Array<{ accountCode: string; counterparty: string | null; funding: MeterFunding; amountMinor: string; passThroughMinor: string; events: number }>;
 }
 
 /**
@@ -495,7 +532,7 @@ export async function aggregate(
   assertCurrency(currency);
 
   const rows = await db.sql.query<Record<string, unknown>>(
-    `SELECT id, account_code, counterparty, internal, amount_minor, pass_through_minor, holder
+    `SELECT id, account_code, counterparty, internal, amount_minor, pass_through_minor, holder, funding
        FROM ${table(db, 'meter_events')}
       WHERE company_id = $1 AND status = 'captured' AND batch_id IS NULL AND currency = $2
         AND occurred_at >= $3::timestamptz AND occurred_at <= $4::timestamptz
@@ -510,14 +547,17 @@ export async function aggregate(
   const internal = rows.filter((r: Record<string, unknown>) => r['internal'] === true);
   const external = rows.filter((r: Record<string, unknown>) => r['internal'] !== true);
 
-  type Group = { accountCode: string; counterparty: string | null; amount: bigint; passThrough: bigint; events: number };
+  type Group = { accountCode: string; counterparty: string | null; funding: MeterFunding; amount: bigint; passThrough: bigint; events: number };
   const groups = new Map<string, Group>();
   let total = 0n;
   for (const r of external) {
     const accountCode = String(r['account_code']);
     const counterparty = (r['counterparty'] as string | null) ?? null;
-    const key = `${accountCode} ${counterparty ?? ''}`;
-    const g = groups.get(key) ?? { accountCode, counterparty, amount: 0n, passThrough: 0n, events: 0 };
+    // Funding is part of the key: prepaid and earned land on different
+    // sides of the ledger even when the expense account is the same.
+    const funding: MeterFunding = (r['funding'] as MeterFunding) ?? 'balance';
+    const key = `${accountCode} ${counterparty ?? ''} ${funding}`;
+    const g = groups.get(key) ?? { accountCode, counterparty, funding, amount: 0n, passThrough: 0n, events: 0 };
     g.amount += toMinor(r['amount_minor']);
     g.passThrough += toMinor(r['pass_through_minor'] ?? 0);
     g.events += 1;
@@ -538,9 +578,17 @@ export async function aggregate(
           entries.push({ accountCode: ACCOUNT.COMMISSION_REVENUE, direction: 'credit', amountMinor: g.amount - g.passThrough });
         }
       } else {
-        // An external resource this company consumed, out of what it prepaid.
+        // The expense is the same either way; what differs is what stands
+        // behind it. Prepaid money draws down a credit balance somebody
+        // already handed over; earned work creates a debt to whoever did it.
         entries.push({ accountCode: g.accountCode, direction: 'debit', amountMinor: g.amount });
-        entries.push({ accountCode: ACCOUNT.CUSTOMER_CREDITS, direction: 'credit', amountMinor: g.amount });
+        entries.push({
+          accountCode: g.funding === 'accrual' ? ACCOUNT.ACCRUED_STREAMS_PAYABLE
+            : g.funding === 'prepaid' ? ACCOUNT.PREPAID_CREDITS
+              : ACCOUNT.CUSTOMER_CREDITS,
+          direction: 'credit',
+          amountMinor: g.amount,
+        });
       }
     }
     const posted = await postTransaction(db, {
@@ -579,7 +627,7 @@ export async function aggregate(
     amountMinor: fromMinor(total),
     skippedInternal: internal.length,
     groups: [...groups.values()].map((g) => ({
-      accountCode: g.accountCode, counterparty: g.counterparty,
+      accountCode: g.accountCode, counterparty: g.counterparty, funding: g.funding,
       amountMinor: fromMinor(g.amount), passThroughMinor: fromMinor(g.passThrough), events: g.events,
     })),
   };
@@ -657,6 +705,79 @@ export async function statement(
     events,
     lines,
   };
+}
+
+/**
+ * Turn a period's consumption into the one document that is legally an invoice.
+ *
+ * This is the other half of "no invoice before each action": the customer
+ * transacts continuously and their balance falls as they go, and then once a
+ * month they get a tax invoice for the total with the detail behind it. One
+ * line per counterparty and SKU — the same grouping the statement shows, so
+ * the invoice and the statement cannot disagree — and a reference that makes
+ * running the month twice produce one document rather than two.
+ *
+ * It bills what was consumed, not what is owed: a customer who prepaid has
+ * already paid, and the invoice is marked paid out of the balance they drew
+ * on. A customer on credit gets an ordinary receivable.
+ */
+export async function invoiceStatement(
+  db: LedgerDb,
+  companyId: string,
+  input: {
+    holder: string;
+    customerId: string;
+    currency: string;
+    from: Date | string;
+    to: Date | string;
+    /** True when the holder prepaid: the invoice is settled against the balance they drew on. */
+    prepaid?: boolean;
+    accountCode?: string;
+    dueAt?: Date | string | null;
+    createdBy?: string;
+    reference?: string;
+  },
+): Promise<{ invoiceId: string | null; number: string | null; totalMinor: string; lines: number; alreadyBilled: boolean }> {
+  const s = await statement(db, companyId, { holder: input.holder, currency: input.currency, from: input.from, to: input.to });
+  if (s.lines.length === 0 || toMinor(s.spentMinor) === 0n) {
+    return { invoiceId: null, number: null, totalMinor: '0', lines: 0, alreadyBilled: false };
+  }
+  const reference = input.reference ?? `statement:${input.holder}:${s.from.slice(0, 10)}:${s.to.slice(0, 10)}`;
+  const existing = await db.sql.query<{ id: string; number: string }>(
+    `SELECT id, number FROM ${table(db, 'invoices')} WHERE company_id = $1 AND reference = $2 LIMIT 1`,
+    [companyId, reference],
+  );
+  if (existing[0]) {
+    return { invoiceId: existing[0].id, number: existing[0].number, totalMinor: s.spentMinor, lines: s.lines.length, alreadyBilled: true };
+  }
+
+  const { createInvoice, issueInvoice, recordPayment } = await import('./invoices.js');
+  const draft = await createInvoice(db, companyId, {
+    customerId: input.customerId,
+    currency: input.currency,
+    reference,
+    ...(input.dueAt === undefined || input.dueAt === null ? {} : { dueAt: toIso(input.dueAt) }),
+    lines: s.lines.map((l) => ({
+      description: `${l.counterparty ?? 'Agent activity'}${l.sku ? ` · ${l.sku}` : ''} · ${l.events} event${l.events === 1 ? '' : 's'}`,
+      quantity: '1',
+      unitAmountMinor: l.amountMinor,
+      ...(input.accountCode ? { accountCode: input.accountCode } : {}),
+    })),
+    notes: `Usage from ${s.from.slice(0, 10)} to ${s.to.slice(0, 10)}. ${s.events} metered events; the detail is on the statement.`,
+  });
+  const issued = await issueInvoice(db, companyId, draft.id, { createdBy: input.createdBy ?? 'subledger' });
+  if (input.prepaid) {
+    // They paid before they spent it, so the invoice documents what the money
+    // was for rather than asking for it again.
+    await recordPayment(db, companyId, draft.id, {
+      amountMinor: toMinor(s.spentMinor),
+      cashAccountCode: ACCOUNT.CUSTOMER_CREDITS,
+      reference,
+      occurredAt: toIso(input.to),
+      createdBy: input.createdBy ?? 'subledger',
+    });
+  }
+  return { invoiceId: draft.id, number: issued.number, totalMinor: s.spentMinor, lines: s.lines.length, alreadyBilled: false };
 }
 
 const toIso = (v: Date | string): string => (v instanceof Date ? v.toISOString() : new Date(v).toISOString());

@@ -45,6 +45,7 @@ describe('plugin api routes', () => {
       'settings.get', 'settings.update', 'payments.list', 'payments.create',
       'import.chart', 'import.opening', 'import.standing', 'import.undo', 'import.documents',
       'meter.balances', 'meter.fund', 'meter.reserve', 'meter.capture', 'meter.release', 'meter.events', 'meter.aggregate', 'meter.statement',
+      'meter.invoice', 'streams.list', 'streams.open', 'streams.accrue', 'streams.tick', 'streams.pause', 'streams.cancel', 'streams.withdraw',
     ]) {
       expect(keys.has(needed), `${needed} is not published`).toBe(true);
     }
@@ -65,7 +66,7 @@ describe('plugin api routes', () => {
       .filter((r) => r.method === 'POST' && r.auth === 'board-or-agent')
       .map((r) => r.routeKey)
       .sort();
-    expect(agentWritable).toEqual(['bills.create', 'invoices.create', 'meter.capture', 'meter.release', 'meter.reserve', 'tools.invoke']);
+    expect(agentWritable).toEqual(['bills.create', 'invoices.create', 'meter.capture', 'meter.release', 'meter.reserve', 'streams.accrue', 'streams.tick', 'tools.invoke']);
   });
 
   it('a path is declared once', () => {

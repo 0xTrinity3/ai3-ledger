@@ -119,6 +119,14 @@ export { agentTokens, allocate, modelWeight, TOKEN_WEIGHT, MODEL_CLASS, DEFAULT_
 // it. See src/core/subledger.ts for why the general ledger does not hear about
 // each one.
 export {
-  authorise, aggregate, balanceFor, capture, fund, getEvent, listBalances, listEvents, record, release, reserve, statement,
+  authorise, aggregate, balanceFor, capture, fund, getEvent, invoiceStatement, listBalances, listEvents, record, release, reserve, statement,
 } from './subledger.js';
 export type { MeterEvent, MeterKind, MeterStatus, Balance, AggregateResult, Statement } from './subledger.js';
+
+// Streams: work earned continuously, accrued as it happens and settled when
+// somebody withdraws. See src/core/streams.ts.
+export {
+  accrue, cancelStream, getStream, headroom, listStreams, openStream, pauseStream, resumeStream, tick, withdraw,
+} from './streams.js';
+export type { Stream, StreamStatus, CapPeriod } from './streams.js';
+export type { MeterFunding } from './subledger.js';
