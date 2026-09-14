@@ -7,7 +7,7 @@
  * Both failures are silent and both are one typo away, which is exactly the
  * kind of thing a test should hold rather than a reviewer.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, test } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,4 +69,18 @@ describe('plugin api routes', () => {
       seen.set(key, r.routeKey);
     }
   });
+});
+
+/**
+ * The two versions a plugin has, and the one that actually decides anything.
+ *
+ * The provisioner upgrades a tenant by comparing package.json's version;
+ * Paperclip shows the manifest's. Bumping the manifest alone — which is the
+ * natural thing to do when adding a route — ships new code under an old
+ * version number, so every tenant reports "current" and never upgrades. That
+ * is exactly how import.documents almost went out unreachable.
+ */
+test('the manifest version and the package version are the same', async () => {
+  const pkg = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8')) as { version: string };
+  expect(manifest.version).toBe(pkg.version);
 });
