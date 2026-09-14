@@ -107,6 +107,15 @@ import {
   type LedgerDb,
   type SweepResult,
   resolveCode,
+  aggregate as meterAggregate,
+  balanceFor as meterBalance,
+  capture as meterCapture,
+  fund as meterFund,
+  listBalances as meterBalances,
+  listEvents as meterEvents,
+  release as meterRelease,
+  reserve as meterReserve,
+  statement as meterStatement,
 
 } from '../core/index.js';
 import { paperclipCostSource } from './cost-source.js';
@@ -703,6 +712,79 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
           }),
         });
       }
+      // ---- the subledger -------------------------------------------------
+      //
+      // The detail of what agents did, and the periodic journal that summarises
+      // it. An agent may reserve, capture and release its own budget; only the
+      // board funds a balance or sweeps a window into the general ledger.
+      case 'meter.balances':
+        return json(200, { companyId, balances: await meterBalances(l, companyId) });
+      case 'meter.fund': {
+        if (!board) return bad('Only the board can put money on a balance', 403);
+        return json(200, await meterFund(l, companyId, {
+          holder: String(body['holder'] ?? ''),
+          currency: String(body['currency'] ?? 'USD'),
+          amountMinor: String(body['amountMinor'] ?? '0'),
+          post: body['post'] === true,
+          ...(typeof body['cashAccountCode'] === 'string' ? { cashAccountCode: body['cashAccountCode'] } : {}),
+          ...(typeof body['reference'] === 'string' ? { reference: body['reference'] } : {}),
+          createdBy: who(input),
+        }));
+      }
+      case 'meter.reserve': {
+        // Cannot overspend: the balance refuses, which is the whole mechanism.
+        return json(200, await meterReserve(l, companyId, {
+          holder: String(body['holder'] ?? ''),
+          currency: String(body['currency'] ?? 'USD'),
+          maxMinor: String(body['maxMinor'] ?? '0'),
+          ...(typeof body['kind'] === 'string' ? { kind: body['kind'] as 'usage' | 'time' | 'output' | 'outcome' } : {}),
+          ...(typeof body['accountCode'] === 'string' ? { accountCode: body['accountCode'] } : {}),
+          ...(typeof body['counterparty'] === 'string' ? { counterparty: body['counterparty'] } : {}),
+          internal: body['internal'] === true,
+          ...(typeof body['sku'] === 'string' ? { sku: body['sku'] } : {}),
+          ...(typeof body['reference'] === 'string' ? { reference: body['reference'] } : {}),
+          ...(body['subject'] && typeof body['subject'] === 'object' ? { subject: body['subject'] as Record<string, string> } : {}),
+          createdBy: who(input),
+        }));
+      }
+      case 'meter.capture': {
+        return json(200, await meterCapture(l, companyId, String(body['id'] ?? ''), {
+          amountMinor: String(body['amountMinor'] ?? '0'),
+          ...(body['passThroughMinor'] === undefined ? {} : { passThroughMinor: String(body['passThroughMinor']) }),
+          ...(body['quantity'] === undefined ? {} : { quantity: String(body['quantity']) }),
+          ...(body['unitAmountMinor'] === undefined ? {} : { unitAmountMinor: String(body['unitAmountMinor']) }),
+        }));
+      }
+      case 'meter.release':
+        return json(200, await meterRelease(l, companyId, String(body['id'] ?? '')));
+      case 'meter.events':
+        return json(200, {
+          companyId,
+          events: await meterEvents(l, companyId, {
+            ...(input.query['holder'] ? { holder: String(input.query['holder']) } : {}),
+            ...(input.query['from'] ? { from: String(input.query['from']) } : {}),
+            ...(input.query['to'] ? { to: String(input.query['to']) } : {}),
+            ...(input.query['status'] ? { status: String(input.query['status']) as 'reserved' | 'captured' | 'released' | 'void' } : {}),
+            ...(input.query['limit'] ? { limit: Number(input.query['limit']) } : {}),
+          }),
+        });
+      case 'meter.aggregate': {
+        if (!board) return bad('Only the board can post the subledger to the general ledger', 403);
+        return json(200, await meterAggregate(l, companyId, {
+          from: String(body['from'] ?? ''),
+          to: String(body['to'] ?? ''),
+          ...(typeof body['currency'] === 'string' ? { currency: body['currency'] } : {}),
+          createdBy: who(input),
+        }));
+      }
+      case 'meter.statement':
+        return json(200, await meterStatement(l, companyId, {
+          holder: String(input.query['holder'] ?? ''),
+          currency: String(input.query['currency'] ?? 'USD'),
+          from: String(input.query['from'] ?? ''),
+          to: String(input.query['to'] ?? ''),
+        }));
+
       case 'import.documents': {
         // Invoices and bills out of a spreadsheet, on the same read → show →
         // apply path as the chart and the opening balances. A preview writes

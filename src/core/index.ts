@@ -114,3 +114,11 @@ export { sumPostedBySource } from './ledger.js';
 
 export type { AgentTokens, Allocation } from './tokens.js';
 export { agentTokens, allocate, modelWeight, TOKEN_WEIGHT, MODEL_CLASS, DEFAULT_MODEL_WEIGHT } from './tokens.js';
+
+// The subledger: every agent action, and the periodic journal that summarises
+// it. See src/core/subledger.ts for why the general ledger does not hear about
+// each one.
+export {
+  authorise, aggregate, balanceFor, capture, fund, getEvent, listBalances, listEvents, record, release, reserve, statement,
+} from './subledger.js';
+export type { MeterEvent, MeterKind, MeterStatus, Balance, AggregateResult, Statement } from './subledger.js';

@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.21.0',
+  version: '0.22.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -182,6 +182,14 @@ const manifest: PaperclipPluginManifestV1 = {
 
     { routeKey: 'import.chart', method: 'POST', path: '/import/chart', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'import.opening', method: 'POST', path: '/import/opening-balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'meter.balances', method: 'GET', path: '/meter/balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'meter.fund', method: 'POST', path: '/meter/fund', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'meter.reserve', method: 'POST', path: '/meter/reserve', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'meter.capture', method: 'POST', path: '/meter/capture', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'meter.release', method: 'POST', path: '/meter/release', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'meter.events', method: 'GET', path: '/meter/events', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'meter.aggregate', method: 'POST', path: '/meter/aggregate', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'meter.statement', method: 'GET', path: '/meter/statement', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'import.documents', method: 'POST', path: '/import/documents', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'import.standing', method: 'GET', path: '/import/opening-balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'import.undo', method: 'POST', path: '/import/opening-balances/undo', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },

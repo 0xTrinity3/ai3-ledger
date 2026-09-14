@@ -44,6 +44,7 @@ describe('plugin api routes', () => {
       'reconcile.run', 'reconcile.decide', 'reconcile.rules', 'reconcile.rule',
       'settings.get', 'settings.update', 'payments.list', 'payments.create',
       'import.chart', 'import.opening', 'import.standing', 'import.undo', 'import.documents',
+      'meter.balances', 'meter.fund', 'meter.reserve', 'meter.capture', 'meter.release', 'meter.events', 'meter.aggregate', 'meter.statement',
     ]) {
       expect(keys.has(needed), `${needed} is not published`).toBe(true);
     }
@@ -54,11 +55,17 @@ describe('plugin api routes', () => {
     // and may read. It may not issue, pay, post, reconcile or change settings:
     // those are the board's, and the worker enforces it case by case. This is
     // the manifest half of the same rule.
+    //
+    // The three subledger verbs are the deliberate exception. Reserving its own
+    // budget before it acts, capturing what the work actually cost and giving
+    // back what it did not spend is the agent's own half of the card-style
+    // flow, and none of it can overspend: the balance refuses. Nothing here
+    // reaches the general ledger — aggregation is the board's.
     const agentWritable = manifest.apiRoutes
       .filter((r) => r.method === 'POST' && r.auth === 'board-or-agent')
       .map((r) => r.routeKey)
       .sort();
-    expect(agentWritable).toEqual(['bills.create', 'invoices.create', 'tools.invoke']);
+    expect(agentWritable).toEqual(['bills.create', 'invoices.create', 'meter.capture', 'meter.release', 'meter.reserve', 'tools.invoke']);
   });
 
   it('a path is declared once', () => {

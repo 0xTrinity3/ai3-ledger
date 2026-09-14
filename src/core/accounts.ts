@@ -26,6 +26,15 @@ export interface SeedAccount {
  */
 export const ACCOUNT = {
   TREASURY: '@treasury',
+  /** What a stream has earned and not yet settled, on either side of it. */
+  ACCRUED_SERVICES_RECEIVABLE: '@accruedServicesReceivable',
+  ACCRUED_STREAMS_PAYABLE: '@accruedStreamsPayable',
+  /** Money held for somebody who has not spent it yet — a prepaid balance. */
+  CUSTOMER_CREDITS: '@customerCredits',
+  /** Collected on somebody else's behalf, and owed on to them. */
+  PROVIDER_PAYABLE: '@providerPayable',
+  /** Ours out of what we collected, when we are the marketplace and not the provider. */
+  COMMISSION_REVENUE: '@commissionRevenue',
   RECEIVABLES: '@receivables',
   PREPAID_CREDITS: '@prepaidCredits',
   PAYABLES: '@payables',
@@ -66,6 +75,13 @@ const V1_ROLES: Record<string, string> = {
   '@computeAndSandboxes': '5200',
   '@paymentProcessing': '5300',
   '@otherOperating': '5900',
+  // Chart 1 never had these as lines of their own; they fall back to the
+  // nearest thing it does have, so a company on the old chart still balances.
+  '@accruedServicesReceivable': '1100',
+  '@accruedStreamsPayable': '2000',
+  '@customerCredits': '2000',
+  '@providerPayable': '2000',
+  '@commissionRevenue': '4000',
 };
 
 const V1_ACCOUNTS: readonly SeedAccount[] = [
@@ -108,6 +124,13 @@ const V2_ROLES: Record<string, string> = {
   '@computeAndSandboxes': '5120',
   '@paymentProcessing': '5140',
   '@otherOperating': '6120',
+  // The two control accounts the subledger needs: what has been earned or
+  // consumed continuously and not yet settled. See src/core/subledger.ts.
+  '@accruedServicesReceivable': '1220',
+  '@accruedStreamsPayable': '2130',
+  '@customerCredits': '2210',
+  '@providerPayable': '2220',
+  '@commissionRevenue': '4200',
 };
 
 const V2_ACCOUNTS: readonly SeedAccount[] = [
@@ -117,6 +140,7 @@ const V2_ACCOUNTS: readonly SeedAccount[] = [
   { code: '1130', name: 'Crypto/stablecoin wallets', type: 'asset' },
   { code: '1200', name: 'Accounts receivable', type: 'asset' },
   { code: '1210', name: 'Unbilled revenue', type: 'asset' },
+  { code: '1220', name: 'Accrued agent services receivable', type: 'asset' },
   { code: '1300', name: 'Prepaid model/API credits', type: 'asset' },
   { code: '1310', name: 'Other prepaid software', type: 'asset' },
   { code: '1400', name: 'Deposits', type: 'asset' },
@@ -126,6 +150,7 @@ const V2_ACCOUNTS: readonly SeedAccount[] = [
   { code: '2100', name: 'Accounts payable', type: 'liability' },
   { code: '2110', name: 'Accrued model/API usage', type: 'liability' },
   { code: '2120', name: 'Payroll and contractor liabilities', type: 'liability' },
+  { code: '2130', name: 'Accrued agent streams payable', type: 'liability' },
   { code: '2200', name: 'Deferred subscription revenue', type: 'liability' },
   { code: '2210', name: 'Customer credit balances', type: 'liability' },
   { code: '2220', name: 'Marketplace provider payables', type: 'liability' },
