@@ -48,7 +48,7 @@ async function addCost(cents: number, agent: string, at: string) {
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   await fund(500_000n, '2026-07-01T00:00:00Z', 'fund-jul');
   await addCost(1_000, AGENT_A, '2026-07-10T00:00:00Z');
   await addCost(2_000, AGENT_B, '2026-07-20T00:00:00Z');
@@ -138,21 +138,21 @@ describe('M4 · balance sheet', () => {
 
   it('shows the receivable before payment and treasury after', async () => {
     const before = await balanceSheet(db, CO, '2026-07-31T00:00:00Z');
-    const rec = before.assets.lines.find((l) => l.code === ACCOUNT.RECEIVABLES)!;
+    const rec = before.assets.lines.find((l) => l.code === '1100')!;
     expect(rec.balanceMinor).toBe('90000');
     expect(before.assets.totalMinor).toBe(String(500_000 - 3_000 + 90_000));
     expect(before.equity.retainedEarningsMinor).toBe('87000');
     expect(before.equity.totalMinor).toBe(String(500_000 + 87_000));
 
     const after = await balanceSheet(db, CO, '2026-08-31T00:00:00Z');
-    expect(after.assets.lines.find((l) => l.code === ACCOUNT.RECEIVABLES)!.balanceMinor).toBe('0');
-    expect(after.assets.lines.find((l) => l.code === ACCOUNT.TREASURY)!.balanceMinor).toBe(String(500_000 - 7_000 + 90_000 + 1));
+    expect(after.assets.lines.find((l) => l.code === '1100')!.balanceMinor).toBe('0');
+    expect(after.assets.lines.find((l) => l.code === '1000')!.balanceMinor).toBe(String(500_000 - 7_000 + 90_000 + 1));
     expect(after.equity.retainedEarningsMinor).toBe('83000');
   });
 
   it('an empty company balances at zero', async () => {
     const EMPTY = '99999999-9999-4999-8999-999999999999';
-    await seedAccounts(db, EMPTY, 'USD');
+    await seedAccounts(db, EMPTY, 'USD', { version: 1 });
     const bs = await balanceSheet(db, EMPTY);
     expect(bs.balances).toBe(true);
     expect(bs.assets.totalMinor).toBe('0');

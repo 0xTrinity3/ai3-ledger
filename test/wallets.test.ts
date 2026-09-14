@@ -33,7 +33,7 @@ const CO = '77777777-7777-4777-8777-777777777777';
 const ADDR = '0x1111111111111111111111111111111111111111';
 
 let db: PluginTestDb;
-beforeAll(async () => { db = await openPluginTestDb(); await seedAccounts(db, CO, 'USD'); });
+beforeAll(async () => { db = await openPluginTestDb(); await seedAccounts(db, CO, 'USD', { version: 1 }); });
 afterAll(async () => { await db.close(); });
 
 type FakeFetch = (url: string, init?: RequestInit) => Promise<Response>;

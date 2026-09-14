@@ -5,7 +5,7 @@
  * rather than assuming it.
  */
 import { ACCOUNT, normalSide, type AccountType } from './accounts.js';
-import { LedgerError, accountBalances } from './ledger.js';
+import { LedgerError, accountBalances, accountsOf } from './ledger.js';
 import { fromMinor, table, toIso, toMinor, type LedgerDb, type Minor } from './sql.js';
 
 export type GroupBy = 'agent' | 'project' | 'goal';
@@ -179,7 +179,7 @@ export async function balanceSheet(db: LedgerDb, companyId: string, asOf: Date |
     equity: {
       // The seeded 3900 account only moves at a period close; the current
       // year's result is shown as its own line so the sheet balances live.
-      lines: [...equity, { code: `${ACCOUNT.RETAINED_EARNINGS}.current`, name: 'Current earnings (income less expense to date)', balanceMinor: fromMinor(retained) }],
+      lines: [...equity, { code: `${(await accountsOf(db, companyId))[ACCOUNT.RETAINED_EARNINGS]}.current`, name: 'Current earnings (income less expense to date)', balanceMinor: fromMinor(retained) }],
       retainedEarningsMinor: fromMinor(retained),
       totalMinor: fromMinor(equityTotal),
     },

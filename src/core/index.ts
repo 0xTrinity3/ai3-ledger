@@ -1,8 +1,8 @@
 export type { SqlClient, LedgerDb, Minor, PostingMode } from './sql.js';
 export { table, toMinor, fromMinor, toIso, newId, assertPositiveMinor, assertCurrency } from './sql.js';
 
-export type { AccountType, SeedAccount, AccountCode } from './accounts.js';
-export { ACCOUNT, SEED_ACCOUNTS, normalSide } from './accounts.js';
+export type { AccountType, SeedAccount, AccountCode, AccountRole, ChartVersion } from './accounts.js';
+export { ACCOUNT, CHARTS, CHART_VERSIONS, CURRENT_CHART, SEED_ACCOUNTS, codeFor, isRole, normalSide, rolesOf } from './accounts.js';
 
 export type {
   Direction,
@@ -22,6 +22,11 @@ export {
   LedgerError,
   validatePost,
   seedAccounts,
+  resolveCode,
+  resolveLineAccounts,
+  accountsOf,
+  chartVersionOf,
+  forgetChartVersions,
   postTransaction,
   postReversal,
   cleanupPending,

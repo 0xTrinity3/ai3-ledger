@@ -20,7 +20,7 @@ beforeAll(async () => { db = await openPluginTestDb(); });
 afterAll(async () => { await db.close(); });
 beforeEach(async () => {
   CO = `7777${String(n += 1).padStart(4, '0')}-7777-4777-8777-777777777777`;
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
 });
 
 async function anInvoice(totalMinor = '10000') {

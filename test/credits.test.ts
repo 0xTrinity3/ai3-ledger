@@ -15,7 +15,7 @@ const CO = '88888888-8888-4888-8888-888888888888';
 let db: PluginTestDb;
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   await updateSettings(db, CO, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
 });
 afterAll(async () => { await db.close(); });
@@ -52,20 +52,20 @@ describe('model credits', () => {
     const settings = await getSettings(db, CO, 'USD');
     const r1 = await syncCredits(db, ai3(HOSTED), settings, CO, 'test');
     expect(r1).toMatchObject({ fetched: true, grantsBooked: 2, usageBookedMinor: '481', skipped: null });
-    expect(await balanceOf(db, CO, ACCOUNT.PREPAID_CREDITS)).toBe(20019n); // 500 + 20000 - 481
-    expect(await balanceOf(db, CO, ACCOUNT.MODEL_INFERENCE)).toBe(481n);
-    expect(await balanceOf(db, CO, ACCOUNT.CONTRIBUTED_FUNDS)).toBe(20500n); // equity, on its normal side
+    expect(await balanceOf(db, CO, '1300')).toBe(20019n); // 500 + 20000 - 481
+    expect(await balanceOf(db, CO, '5000')).toBe(481n);
+    expect(await balanceOf(db, CO, '3000')).toBe(20500n); // equity, on its normal side
 
     const r2 = await syncCredits(db, ai3(HOSTED), settings, CO, 'test');
     expect(r2).toMatchObject({ grantsBooked: 0, usageBookedMinor: '0' });
-    expect(await balanceOf(db, CO, ACCOUNT.PREPAID_CREDITS)).toBe(20019n);
+    expect(await balanceOf(db, CO, '1300')).toBe(20019n);
 
     // More usage since: only the difference is posted.
     const later = { ...HOSTED, usageMinor: '1000', chargedMinor: '1200', remainingMinor: '19300' };
     const r3 = await syncCredits(db, ai3(later), settings, CO, 'test');
     expect(r3.usageBookedMinor).toBe('719');
-    expect(await sumPostedBySource(db, CO, CREDITS_PLATFORM, 'cost_sweep', ACCOUNT.MODEL_INFERENCE, 'debit')).toBe(1200n);
-    expect(await balanceOf(db, CO, ACCOUNT.PREPAID_CREDITS)).toBe(19300n);
+    expect(await sumPostedBySource(db, CO, CREDITS_PLATFORM, 'cost_sweep', '5000', 'debit')).toBe(1200n);
+    expect(await balanceOf(db, CO, '1300')).toBe(19300n);
   });
 
   it('leaves pathUSD top-ups to the wallet feed and books nothing for a company on its own key', async () => {
@@ -73,7 +73,7 @@ describe('model credits', () => {
     const withCrypto = { ...HOSTED, chargedMinor: '1200', entries: [...HOSTED.entries, { at: '2026-09-12T09:00:00.000Z', amountMinor: '2000', kind: 'crypto', ref: 'line:abc' }] };
     const r = await syncCredits(db, ai3(withCrypto), settings, CO, 'test');
     expect(r.grantsBooked).toBe(0);
-    expect(await balanceOf(db, CO, ACCOUNT.PREPAID_CREDITS)).toBe(19300n);
+    expect(await balanceOf(db, CO, '1300')).toBe(19300n);
     const own = await syncCredits(db, ai3({ ...HOSTED, keyed: false }), settings, CO, 'test');
     expect(own.skipped).toMatch(/own model key/);
     const notHosted = await syncCredits(db, ai3({ hosted: false, keyed: false, entries: [] }), settings, CO, 'test');
@@ -102,7 +102,7 @@ describe('a charge nobody priced still lands on the agents that caused it', () =
 
   it('splits the metered charge by measured tokens, and the parts sum to the whole', async () => {
     const db2 = await openPluginTestDb();
-    await seedAccounts(db2, CO2, 'USD');
+    await seedAccounts(db2, CO2, 'USD', { version: 1 });
     await updateSettings(db2, CO2, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
 
     // Paperclip's own record of two agents at work. cost_cents is 0 on every
@@ -146,14 +146,14 @@ describe('a charge nobody priced still lands on the agents that caused it', () =
   it('books the charge whole when no agent caused any of it', async () => {
     const CO3 = '33333333-3333-4333-8333-333333333333';
     const db3 = await openPluginTestDb();
-    await seedAccounts(db3, CO3, 'USD');
+    await seedAccounts(db3, CO3, 'USD', { version: 1 });
     await updateSettings(db3, CO3, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
     const r = await syncCredits(db3, ai3({ ...HOSTED, chargedMinor: '500', entries: [] }), await getSettings(db3, CO3, 'USD'), CO3, 'test');
     expect(r.usageBookedMinor).toBe('500');
     expect(r.attributedToAgents).toBe(0);
     expect(r.unattributedMinor).toBe('500');
     // Real money, still booked: the company is out of pocket either way.
-    expect(await sumPostedBySource(db3, CO3, CREDITS_PLATFORM, 'cost_sweep', ACCOUNT.MODEL_INFERENCE, 'debit')).toBe(500n);
+    expect(await sumPostedBySource(db3, CO3, CREDITS_PLATFORM, 'cost_sweep', '5000', 'debit')).toBe(500n);
     await db3.close();
   });
 });

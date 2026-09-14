@@ -38,7 +38,7 @@ function entry(over: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   await updateSettings(db, CO, { baseCurrency: 'USD', ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
 });
 afterAll(async () => { await db.close(); });

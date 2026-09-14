@@ -106,6 +106,8 @@ import {
   type GroupBy,
   type LedgerDb,
   type SweepResult,
+  resolveCode,
+
 } from '../core/index.js';
 import { paperclipCostSource } from './cost-source.js';
 import { Ai3Error, hostedStatus, isConnected, publishInvoice, revokeInvoice, sendInvoice } from './ai3.js';
@@ -1450,7 +1452,8 @@ const plugin = definePlugin({
       let error: string | null = null;
       try { view = await fetchCredits(httpFetch, settings, companyId); } catch (err) { error = err instanceof Error ? err.message : String(err); }
       const bal = await accountBalances(ledger(), companyId);
-      const prepaid = bal.find((a) => a.code === ACCOUNT.PREPAID_CREDITS);
+      const prepaidCode = await resolveCode(ledger(), companyId, ACCOUNT.PREPAID_CREDITS);
+      const prepaid = bal.find((a) => a.code === prepaidCode);
       return { connected: true, view, error, bookedMinor: prepaid ? fromMinor(prepaid.balanceMinor) : '0' };
     });
     context.actions.register('credits.sync', async (params, ctx) => {

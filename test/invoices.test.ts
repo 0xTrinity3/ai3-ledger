@@ -30,8 +30,8 @@ let customerId: string;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
-  await seedAccounts(db, OTHER, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
+  await seedAccounts(db, OTHER, 'USD', { version: 1 });
   const c = await createCustomer(db, CO, { name: 'Acme Studio', email: 'ap@acme.example' });
   customerId = c.id;
 });
@@ -42,7 +42,7 @@ afterAll(async () => {
 
 async function incomeIn(from: string, to: string): Promise<bigint> {
   const rows = await accountBalances(db, CO, to, from);
-  return rows.find((r) => r.code === ACCOUNT.SERVICE_INCOME)!.balanceMinor;
+  return rows.find((r) => r.code === '4000')!.balanceMinor;
 }
 
 describe('M3 · drafts', () => {
@@ -92,13 +92,13 @@ describe('M3 · issue, pay, write off', () => {
     const issued = await issueInvoice(db, CO, inv.id, { issuedAt: '2026-08-20T10:00:00Z' });
     expect(issued.status).toBe('issued');
     expect(issued.issuedAt).not.toBeNull();
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(61_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.SERVICE_INCOME)).toBe(61_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(61_000n);
+    expect(await balanceOf(db, CO, '4000')).toBe(61_000n);
     expect(await receivablesOutstanding(db, CO)).toBe(61_000n);
 
     // issuing twice books nothing twice
     await issueInvoice(db, CO, inv.id, { issuedAt: '2026-08-21T10:00:00Z' });
-    expect(await balanceOf(db, CO, ACCOUNT.SERVICE_INCOME)).toBe(61_000n);
+    expect(await balanceOf(db, CO, '4000')).toBe(61_000n);
 
     const paid = await recordPayment(db, CO, inv.id, { amountMinor: 61_000, occurredAt: '2026-09-05T09:00:00Z', reference: 'bank-1' });
     expect(paid.status).toBe('paid');
@@ -107,9 +107,9 @@ describe('M3 · issue, pay, write off', () => {
 
     expect(await incomeIn('2026-08-01T00:00:00Z', '2026-08-31T23:59:59Z')).toBe(61_000n);
     expect(await incomeIn('2026-09-01T00:00:00Z', '2026-09-30T23:59:59Z')).toBe(0n);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY, '2026-08-31T23:59:59Z')).toBe(0n);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY, '2026-09-30T23:59:59Z')).toBe(61_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(0n);
+    expect(await balanceOf(db, CO, '1000', '2026-08-31T23:59:59Z')).toBe(0n);
+    expect(await balanceOf(db, CO, '1000', '2026-09-30T23:59:59Z')).toBe(61_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(0n);
     expect((await trialBalance(db, CO)).netMinor).toBe(0n);
   });
 
@@ -124,7 +124,7 @@ describe('M3 · issue, pay, write off', () => {
     expect(again.paidMinor).toBe('40000');
     await expect(recordPayment(db, CO, inv.id, { amountMinor: 60_001, reference: 'bank-3' })).rejects.toMatchObject({ code: 'invalid' });
     expect(await receivablesOutstanding(db, CO)).toBe(60_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(60_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(60_000n);
   });
 
   it('writes off what is outstanding: income out, receivable cleared, nothing deleted', async () => {
@@ -133,8 +133,8 @@ describe('M3 · issue, pay, write off', () => {
     const off = await writeOffInvoice(db, CO, inv.id, { occurredAt: '2026-09-10T00:00:00Z', reason: 'customer folded' });
     expect(off.status).toBe('written_off');
     expect(off.outstandingMinor).toBe('0');
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(0n);
-    expect(await balanceOf(db, CO, ACCOUNT.SERVICE_INCOME)).toBe(61_000n + 40_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(0n);
+    expect(await balanceOf(db, CO, '4000')).toBe(61_000n + 40_000n);
     const after = await trialBalance(db, CO);
     expect(after.entryCount).toBe(before.entryCount + 2);
     expect(after.netMinor).toBe(0n);
@@ -177,10 +177,10 @@ describe('voiding an issued invoice', () => {
     const before = await balanceOf(db, CO, ACCOUNT.RECEIVABLES);
     const inv = await createInvoice(db, CO, { customerId, currency: 'USD', lines: [{ description: 'Raised in error', quantity: '1', unitAmountMinor: '7000' }] });
     await issueInvoice(db, CO, inv.id, {});
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before + 7000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(before + 7000n);
     const voided = await voidInvoice(db, CO, inv.id, { reason: 'duplicate' });
     expect(voided.status).toBe('void');
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before);
+    expect(await balanceOf(db, CO, '1100')).toBe(before);
     const paid = await createInvoice(db, CO, { customerId, currency: 'USD', lines: [{ description: 'Paid', quantity: '1', unitAmountMinor: '1000' }] });
     await issueInvoice(db, CO, paid.id, {});
     await recordPayment(db, CO, paid.id, { amountMinor: 500n, reference: 'p1' });

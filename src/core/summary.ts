@@ -9,6 +9,7 @@
  * so growth can be read without a second call.
  */
 import { ACCOUNT } from './accounts.js';
+import { accountsOf } from './ledger.js';
 import { listInvoices } from './invoices.js';
 import { position } from './position.js';
 import { profitAndLoss, type ProfitAndLoss } from './reports.js';
@@ -56,6 +57,7 @@ function sumCodes(p: ProfitAndLoss, codes: string[]): bigint {
 
 async function window(db: LedgerDb, companyId: string, from: Date, to: Date, invoices: Array<{ status: string; issuedAt: string | null }>, paidAt: Map<string, string>): Promise<SummaryWindow> {
   const p = await profitAndLoss(db, companyId, { from, to });
+  const roles = await accountsOf(db, companyId);
   const inWindow = (at: string | null | undefined) => Boolean(at) && Date.parse(at!) >= from.getTime() && Date.parse(at!) <= to.getTime();
   return {
     from: from.toISOString(),
@@ -63,8 +65,8 @@ async function window(db: LedgerDb, companyId: string, from: Date, to: Date, inv
     revenueMinor: p.incomeMinor,
     expenseMinor: p.expenseMinor,
     profitMinor: p.netMinor,
-    modelCostMinor: fromMinor(sumCodes(p, [ACCOUNT.MODEL_INFERENCE])),
-    agentCostMinor: fromMinor(sumCodes(p, [ACCOUNT.MODEL_INFERENCE, ACCOUNT.TOOLS_AND_APIS, ACCOUNT.COMPUTE_AND_SANDBOXES])),
+    modelCostMinor: fromMinor(sumCodes(p, [roles[ACCOUNT.MODEL_INFERENCE]!])),
+    agentCostMinor: fromMinor(sumCodes(p, [roles[ACCOUNT.MODEL_INFERENCE]!, roles[ACCOUNT.TOOLS_AND_APIS]!, roles[ACCOUNT.COMPUTE_AND_SANDBOXES]!])),
     invoicesIssued: invoices.filter((i) => i.status !== 'draft' && i.status !== 'void' && inWindow(i.issuedAt)).length,
     invoicesPaid: [...paidAt.values()].filter((at) => inWindow(at)).length,
   };

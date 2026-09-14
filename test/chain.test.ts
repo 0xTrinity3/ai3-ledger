@@ -16,7 +16,7 @@ const CO = '12121212-1212-4121-8121-121212121212';
 const KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as const; // a well-known test key, holds nothing
 
 let db: PluginTestDb;
-beforeAll(async () => { db = await openPluginTestDb(); await seedAccounts(db, CO, 'USD'); });
+beforeAll(async () => { db = await openPluginTestDb(); await seedAccounts(db, CO, 'USD', { version: 1 }); });
 afterAll(async () => { await db.close(); });
 
 describe('tempo helpers', () => {

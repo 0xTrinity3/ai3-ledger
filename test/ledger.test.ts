@@ -14,8 +14,7 @@ import {
   seedAccounts,
   trialBalance,
   validatePost,
-  expenseAccountFor,
-} from '../src/core/index.js';
+  expenseAccountFor, CHARTS} from '../src/core/index.js';
 
 const CO = 'company-a';
 const OTHER = 'company-b';
@@ -24,8 +23,8 @@ let db: TestDb;
 
 beforeAll(async () => {
   db = await openTestDb();
-  await seedAccounts(db, CO, 'USD');
-  await seedAccounts(db, OTHER, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
+  await seedAccounts(db, OTHER, 'USD', { version: 1 });
 });
 
 afterAll(async () => {
@@ -33,11 +32,13 @@ afterAll(async () => {
 });
 
 describe('M1 · chart of accounts', () => {
-  it('seeds the ten system accounts once and is idempotent', async () => {
-    const again = await seedAccounts(db, CO, 'USD');
+  it('seeds one chart once and is idempotent', async () => {
+    const again = await seedAccounts(db, CO, 'USD', { version: 1 });
     expect(again).toBe(0);
     const rows = await accountBalances(db, CO);
-    expect(rows.map((r) => r.code)).toEqual(SEED_ACCOUNTS.map((a) => a.code));
+    // These books were opened on chart 1 and stay on it: seeding again is not
+    // a chance to renumber a company that already has postings.
+    expect(rows.map((r) => r.code)).toEqual(CHARTS[1].accounts.map((a) => a.code));
     expect(rows.every((r) => r.balanceMinor === 0n)).toBe(true);
   });
 });
@@ -104,8 +105,8 @@ describe('M1 · posting', () => {
     });
     expect(r.ok).toBe(true);
     expect(r.inserted).toBe(true);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(500_00n);
-    expect(await balanceOf(db, CO, ACCOUNT.CONTRIBUTED_FUNDS)).toBe(500_00n);
+    expect(await balanceOf(db, CO, '1000')).toBe(500_00n);
+    expect(await balanceOf(db, CO, '3000')).toBe(500_00n);
   });
 
   it('is idempotent on source ref: a replay writes nothing and returns the original id', async () => {
@@ -147,8 +148,10 @@ describe('M1 · posting', () => {
         [
           CO,
           JSON.stringify([
-            { code: ACCOUNT.TREASURY, direction: 'debit', amount: '100' },
-            { code: ACCOUNT.CONTRIBUTED_FUNDS, direction: 'credit', amount: '90' },
+            // Straight to the function: no resolution happens here, so these
+            // are this company's own codes rather than roles.
+            { code: '1000', direction: 'debit', amount: '100' },
+            { code: '3000', direction: 'credit', amount: '90' },
           ]),
         ],
       ),
@@ -220,7 +223,7 @@ describe('M1 · invariants', () => {
     const otherBefore = await balanceOf(db, CO, ACCOUNT.OTHER_OPERATING);
     const rev = await postReversal(db, CO, original.transactionId);
     expect(rev.inserted).toBe(true);
-    expect(await balanceOf(db, CO, ACCOUNT.OTHER_OPERATING)).toBe(otherBefore - 77n);
+    expect(await balanceOf(db, CO, '5900')).toBe(otherBefore - 77n);
     // Reversing twice is a no-op thanks to the deterministic source ref.
     const again = await postReversal(db, CO, original.transactionId);
     expect(again.inserted).toBe(false);
@@ -270,9 +273,9 @@ describe('M1 · tenancy', () => {
         { accountCode: ACCOUNT.CONTRIBUTED_FUNDS, direction: 'credit', amountMinor: 9_99n },
       ],
     });
-    expect(await balanceOf(db, OTHER, ACCOUNT.TREASURY)).toBe(9_99n);
+    expect(await balanceOf(db, OTHER, '1000')).toBe(9_99n);
     const a = await accountBalances(db, CO);
-    const treasuryA = a.find((x) => x.code === ACCOUNT.TREASURY)!;
+    const treasuryA = a.find((x) => x.code === '1000')!;
     expect(treasuryA.balanceMinor).not.toBe(9_99n);
     // The same source ref in a different company is a different transaction: uniqueness is per company.
     const r = await postTransaction(db, {
@@ -288,7 +291,7 @@ describe('M1 · tenancy', () => {
       ],
     });
     expect(r.inserted).toBe(true);
-    expect(await balanceOf(db, OTHER, ACCOUNT.TREASURY)).toBe(9_99n);
+    expect(await balanceOf(db, OTHER, '1000')).toBe(9_99n);
   });
 });
 

@@ -21,7 +21,7 @@
 import { ACCOUNT, type AccountType } from './accounts.js';
 import { approveBill, createBill, findBillByNumber, listBills, payBill, resolveSupplier } from './bills.js';
 import { createCustomer, createInvoice, issueInvoice, listCustomers, listInvoices, recordPayment } from './invoices.js';
-import { LedgerError, accountBalances, postReversal, postTransaction, type EntryInput } from './ledger.js';
+import { LedgerError, accountBalances, postReversal, postTransaction, resolveCode, type EntryInput } from './ledger.js';
 import { getSettings, updateSettings } from './settings.js';
 import { detectDateOrder, parseDate, parseMoney, splitCsv, type DateOrder } from './statements.js';
 import { fromMinor, newId, table, toMinor, type LedgerDb } from './sql.js';
@@ -539,7 +539,8 @@ export async function previewDocuments(db: LedgerDb, companyId: string, parsed: 
   let control: bigint | null = null;
   if (conversion) {
     const bal = await accountBalances(db, companyId, openingMoment(conversion));
-    control = bal.find((a) => a.code === (parsed.kind === 'invoice' ? ACCOUNT.RECEIVABLES : ACCOUNT.PAYABLES))?.balanceMinor ?? 0n;
+    const controlCode = await resolveCode(db, companyId, parsed.kind === 'invoice' ? ACCOUNT.RECEIVABLES : ACCOUNT.PAYABLES);
+    control = bal.find((a) => a.code === controlCode)?.balanceMinor ?? 0n;
   }
   return {
     kind: parsed.kind,

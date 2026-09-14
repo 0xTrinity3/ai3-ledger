@@ -41,7 +41,7 @@ let deps: ToolDeps;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   await updateSettings(db, CO, { baseCurrency: 'USD', ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
   deps = { db, fetch, companyName: async () => 'Stripe Co', baseCurrency: 'USD' };
 });
@@ -111,7 +111,7 @@ describe('the feed', () => {
     const lines = await listStatementLines(db, CO, link!.bankAccountId!, { limit: 10 });
     expect(lines.map((l) => l.status).sort()).toEqual(['created', 'created']);
     const balances = await accountBalances(db, CO);
-    const fees = balances.find((b) => b.code === ACCOUNT.PAYMENT_PROCESSING);
+    const fees = balances.find((b) => b.code === '5300');
     expect(String(fees?.balanceMinor)).toBe('465');
     // Running again with the same lines imports nothing new.
     const again = await syncStripeFeed(db, fetch, settings, CO, { by: 'test' });
@@ -125,14 +125,14 @@ describe('paying by card', () => {
     const r = await runTool(deps, 'pay-invoice', { invoiceUrl: 'https://ai3.test/i/abcdefghijklmnopqrstuv', rail: 'stripe', accountCode: ACCOUNT.TOOLS_AND_APIS }, RUN);
     expect(r.error).toBeUndefined();
     expect(r.content).toContain('Paid 150.00 USD by card');
-    expect(r.data).toMatchObject({ rail: 'stripe', paymentIntentId: 'pi_777', invoice: 'INV-0042', accountCode: ACCOUNT.TOOLS_AND_APIS });
+    expect(r.data).toMatchObject({ rail: 'stripe', paymentIntentId: 'pi_777', invoice: 'INV-0042', accountCode: '5100' });
     const paid = calls.find((c) => c.url.endsWith('/api/ledger/stripe/pay'));
     expect(paid?.body).toMatchObject({ companyId: CO, invoiceUrl: 'https://ai3.test/i/abcdefghijklmnopqrstuv' });
     const card = (await listBankAccounts(db, CO)).find((b) => b.name === STRIPE_CARD_BANK_NAME);
     expect(card).toMatchObject({ kind: 'card' });
     const balances = await accountBalances(db, CO);
     expect(String(balances.find((b) => b.code === card!.accountCode)?.balanceMinor)).toBe('-15000');
-    expect(String(balances.find((b) => b.code === ACCOUNT.TOOLS_AND_APIS)?.balanceMinor)).toBe('15000');
+    expect(String(balances.find((b) => b.code === '5100')?.balanceMinor)).toBe('15000');
   });
 
   it('auto picks the card when the wallet cannot cover it, and explains a refusal', async () => {

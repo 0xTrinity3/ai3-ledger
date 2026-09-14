@@ -18,8 +18,8 @@ let db: PluginTestDb;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
-  await seedAccounts(db, EMPTY, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
+  await seedAccounts(db, EMPTY, 'USD', { version: 1 });
   await postTransaction(db, {
     companyId: CO, occurredAt: '2026-07-01T00:00:00Z', sourcePlatform: 'manual', sourceKind: 'funding', sourceRef: 'fund', currency: 'USD', description: 'Funding',
     entries: [
@@ -137,7 +137,7 @@ describe('agents as profit units', () => {
   it('reports each agent’s own cost and revenue, and leaves unattributed spend out', async () => {
     const CO2 = '66666666-6666-4666-6666-666666666666';
     const db2 = await openPluginTestDb();
-    await seedAccounts(db2, CO2, 'USD');
+    await seedAccounts(db2, CO2, 'USD', { version: 1 });
     const when = new Date('2026-09-15T00:00:00Z');
     // Two agents spend on models; a third cost is tagged to nobody.
     for (const [agent, cents] of [['agent-social', 4000n], ['agent-finance', 96000n]] as Array<[string, bigint]>) {
@@ -173,7 +173,7 @@ describe('agents as profit units', () => {
   it('travels on the payload, and a company with no tagged spend publishes an empty list', async () => {
     const CO3 = '55555555-5555-4555-5555-555555555555';
     const db3 = await openPluginTestDb();
-    await seedAccounts(db3, CO3, 'USD');
+    await seedAccounts(db3, CO3, 'USD', { version: 1 });
     await updateSettings(db3, CO3, { ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
     const payload = await buildSummaryPayload(db3, {
       companyId: CO3, companyName: 'Units Co', settings: await getSettings(db3, CO3, 'USD'), issues: null, now: new Date('2026-09-20T00:00:00Z'),

@@ -10,7 +10,7 @@ let unsentId: string;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   const c = await createCustomer(db, CO, { name: 'Late Payer', email: 'ap@late.example' });
   const due = '2026-09-01T12:00:00.000Z';
   const a = await createInvoice(db, CO, { customerId: c.id, currency: 'USD', lines: [{ description: 'Work', quantity: '1', unitAmountMinor: '20000' }], dueAt: due });

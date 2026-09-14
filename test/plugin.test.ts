@@ -42,8 +42,8 @@ async function addCost(companyId: string, cents: number, extra: Record<string, u
 beforeAll(async () => {
   db = await openPluginTestDb();
   if (!db.validated) console.warn('Paperclip runtime not found next door: SQL validators skipped');
-  await seedAccounts(db, CO, 'USD');
-  await seedAccounts(db, OTHER, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
+  await seedAccounts(db, OTHER, 'USD', { version: 1 });
 });
 
 afterAll(async () => {
@@ -81,7 +81,7 @@ describe('M2 · statements-mode posting', () => {
       ],
     });
     expect(r.inserted).toBe(true);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(100_000n);
+    expect(await balanceOf(db, CO, '1000')).toBe(100_000n);
     const status = await db.raw.query<{ status: string }>(`SELECT status FROM "${PLUGIN_NAMESPACE}".transactions WHERE id = $1`, [r.transactionId]);
     expect(status.rows[0]!.status).toBe('posted');
   });
@@ -100,7 +100,7 @@ describe('M2 · statements-mode posting', () => {
       ],
     });
     expect(again.inserted).toBe(false);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(100_000n);
+    expect(await balanceOf(db, CO, '1000')).toBe(100_000n);
   });
 
   it('rejects an unknown account and leaves nothing behind', async () => {
@@ -171,7 +171,7 @@ describe('M2 · statements-mode posting', () => {
     const before = await balanceOf(db, CO, ACCOUNT.TREASURY);
     const r = await postReversal(db, CO, t.transactionId);
     expect(r.inserted).toBe(true);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(before + 700n);
+    expect(await balanceOf(db, CO, '1000')).toBe(before + 700n);
     expect((await trialBalance(db, CO)).netMinor).toBe(0n);
   });
 });
@@ -196,8 +196,8 @@ describe('M2 · Paperclip cost sweep', () => {
     expect(r.posted).toBe(3);
     expect(r.skipped).toBe(1);
 
-    expect(await balanceOf(db, CO, ACCOUNT.MODEL_INFERENCE)).toBe(1300n);
-    expect(await balanceOf(db, CO, ACCOUNT.COMPUTE_AND_SANDBOXES)).toBe(500n);
+    expect(await balanceOf(db, CO, '5000')).toBe(1300n);
+    expect(await balanceOf(db, CO, '5200')).toBe(500n);
     expect((await trialBalance(db, CO)).netMinor).toBe(0n);
     const treasury = await balanceOf(db, CO, ACCOUNT.TREASURY);
     expect(treasury).toBe(100_000n - 1800n);
@@ -207,7 +207,7 @@ describe('M2 · Paperclip cost sweep', () => {
     const r = await sweepCosts(db, paperclipCostSource(db.sql), CO, { currency: 'USD' });
     expect(r.read).toBe(0);
     expect(r.posted).toBe(0);
-    expect(await balanceOf(db, CO, ACCOUNT.MODEL_INFERENCE)).toBe(1300n);
+    expect(await balanceOf(db, CO, '5000')).toBe(1300n);
   });
 
   it('AC3: deleting the cursor and re-sweeping creates no duplicate transactions', async () => {
@@ -217,7 +217,7 @@ describe('M2 · Paperclip cost sweep', () => {
     expect(r.read).toBe(4);
     expect(r.posted).toBe(0);
     expect(r.duplicates).toBe(3);
-    expect(await balanceOf(db, CO, ACCOUNT.MODEL_INFERENCE)).toBe(1300n);
+    expect(await balanceOf(db, CO, '5000')).toBe(1300n);
     expect((await readCursor(db, CO, 'paperclip')).lastEventRef).not.toBeNull();
   });
 
@@ -230,8 +230,8 @@ describe('M2 · Paperclip cost sweep', () => {
   it('AC10: the other company sees only its own costs', async () => {
     const r = await sweepCosts(db, paperclipCostSource(db.sql), OTHER, { currency: 'USD' });
     expect(r.posted).toBe(1);
-    expect(await balanceOf(db, OTHER, ACCOUNT.MODEL_INFERENCE)).toBe(999n);
-    expect(await balanceOf(db, CO, ACCOUNT.MODEL_INFERENCE)).toBe(1300n);
+    expect(await balanceOf(db, OTHER, '5000')).toBe(999n);
+    expect(await balanceOf(db, CO, '5000')).toBe(1300n);
     const rows = await accountBalances(db, 'nobody');
     expect(rows).toEqual([]);
   });
@@ -240,7 +240,7 @@ describe('M2 · Paperclip cost sweep', () => {
 describe('M2 · position', () => {
   it('AC9: an empty company renders without inventing figures', async () => {
     const EMPTY = '44444444-4444-4444-8444-444444444444';
-    await seedAccounts(db, EMPTY, 'USD');
+    await seedAccounts(db, EMPTY, 'USD', { version: 1 });
     const p = await position(db, EMPTY);
     expect(p.treasuryMinor).toBe('0');
     expect(p.monthToDate.expenseMinor).toBe('0');

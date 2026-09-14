@@ -30,7 +30,7 @@ let customerId: string;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   customerId = (await createCustomer(db, CO, { name: 'Berlin Studio GmbH', email: 'ap@berlin.example' })).id;
 });
 afterAll(async () => {
@@ -97,27 +97,27 @@ describe('multi-currency invoices', () => {
     expect(issued.status).toBe('issued');
     await expect(setInvoicePaymentMethods(db, CO, draft.id, [])).rejects.toMatchObject({ code: 'invalid' });
     // the receivable is booked in base at the rate: 500 USDC at 1 = $500
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(50_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(50_000n);
   });
 
   it('books a currency gain when the payment rate beats the issue rate, and the sheet balances', async () => {
     const inv = (await import('../src/core/index.js').then((m) => m.listInvoices(db, CO, { status: 'draft' }))).find((i) => i.currency === 'EUR')!;
     await issueInvoice(db, CO, inv.id, { issuedAt: '2026-09-02T00:00:00Z' });
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(50_000n + 110_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(50_000n + 110_000n);
     // part payment of €400 when the euro is worth $1.15
     const part = await recordPayment(db, CO, inv.id, { amountMinor: 40_000, rateToBase: '1.15', occurredAt: '2026-09-10T00:00:00Z', reference: 'sepa-1' });
     expect(part.status).toBe('part_paid');
     expect(part.paidMinor).toBe('40000');
     expect(part.outstandingMinor).toBe('60000');
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(46_000n); // $460 arrived
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(50_000n + 110_000n - 44_000n); // relieved at 1.10
-    expect(await balanceOf(db, CO, ACCOUNT.CURRENCY_GAINS)).toBe(2_000n); // $20 gain
+    expect(await balanceOf(db, CO, '1000')).toBe(46_000n); // $460 arrived
+    expect(await balanceOf(db, CO, '1100')).toBe(50_000n + 110_000n - 44_000n); // relieved at 1.10
+    expect(await balanceOf(db, CO, '4900')).toBe(2_000n); // $20 gain
     // the rest at 1.05: a loss, and the receivable clears exactly
     const rest = await recordPayment(db, CO, inv.id, { amountMinor: 60_000, rateToBase: '1.05', occurredAt: '2026-09-20T00:00:00Z', reference: 'sepa-2' });
     expect(rest.status).toBe('paid');
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(50_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(46_000n + 63_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.CURRENCY_GAINS)).toBe(2_000n - 3_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(50_000n);
+    expect(await balanceOf(db, CO, '1000')).toBe(46_000n + 63_000n);
+    expect(await balanceOf(db, CO, '4900')).toBe(2_000n - 3_000n);
     expect((await getInvoice(db, CO, inv.id))!.payments.length).toBe(2);
     expect((await trialBalance(db, CO)).netMinor).toBe(0n);
     expect((await balanceSheet(db, CO)).balances).toBe(true);

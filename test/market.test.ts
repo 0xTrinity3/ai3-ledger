@@ -16,7 +16,7 @@ const CO = '77777777-7777-4777-7777-777777777777';
 let db: PluginTestDb;
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
 });
 afterAll(async () => { await db.close(); });
 

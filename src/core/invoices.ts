@@ -20,7 +20,7 @@
  * plugin sandbox. Nothing here knows about Paperclip.
  */
 import { ACCOUNT } from './accounts.js';
-import { LedgerError, findTransactionBySourceRef, postReversal, postTransaction, type EntryInput, type Subject } from './ledger.js';
+import { LedgerError, findTransactionBySourceRef, postReversal, postTransaction, type EntryInput, type Subject, resolveLineAccounts} from './ledger.js';
 import { getSettings, paymentInstructionsFor, type PaymentInstruction } from './settings.js';
 import { assertCurrency, assertPositiveMinor, fromMinor, newId, table, toIso, toMinor, type LedgerDb, type Minor } from './sql.js';
 
@@ -259,7 +259,7 @@ export async function createInvoice(db: LedgerDb, companyId: string, input: Crea
   }
   const customer = await getCustomer(db, companyId, input.customerId);
   if (!customer) throw new LedgerError(`customer ${input.customerId} not found for company ${companyId}`, 'invalid');
-  const lines = normaliseLines(input.lines);
+  const lines = await resolveLineAccounts(db, companyId, normaliseLines(input.lines));
   const accounts = lines.map((l) => l.account).filter((a): a is string => Boolean(a));
   if (accounts.length) {
     const rows = await db.sql.query<{ code: string }>(`SELECT code FROM ${table(db, 'accounts')} WHERE company_id = $1 AND code = ANY(string_to_array($2::text, ','))`, [companyId, [...new Set(accounts)].join(',')]);

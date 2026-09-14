@@ -13,7 +13,7 @@ let invoiceId: string;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   const c = await createCustomer(db, CO, { name: 'Northwind', email: 'ap@northwind.example' });
   const inv = await createInvoice(db, CO, { customerId: c.id, currency: 'USD', lines: [{ description: 'Work', quantity: '1', unitAmountMinor: '50000' }] });
   invoiceId = inv.id;

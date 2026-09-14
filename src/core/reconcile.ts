@@ -25,7 +25,7 @@ import {
   type StatementLine,
 } from './banks.js';
 import { listInvoices, recordPayment, type Invoice } from './invoices.js';
-import { LedgerError, postTransaction } from './ledger.js';
+import { LedgerError, postTransaction, resolveCode } from './ledger.js';
 import { table, toMinor, type LedgerDb, type Minor } from './sql.js';
 
 const SYMBOL: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' };
@@ -71,7 +71,7 @@ async function unlinkedTreasuryTransactions(db: LedgerDb, companyId: string, fro
     `SELECT t.id, t.occurred_at::text AS occurred_at, t.description, t.source_kind, t.source_ref, e.amount_minor AS amount, e.direction
        FROM ${table(db, 'transactions')} t
        JOIN ${table(db, 'entries')} e ON e.transaction_id = t.id
-       JOIN ${table(db, 'accounts')} a ON a.id = e.account_id AND a.code = '${ACCOUNT.TREASURY}'
+       JOIN ${table(db, 'accounts')} a ON a.id = e.account_id AND a.code = '${await resolveCode(db, companyId, ACCOUNT.TREASURY)}'
       WHERE t.company_id = $1 AND t.status = 'posted'
         AND t.occurred_at >= $2::timestamptz AND t.occurred_at <= $3::timestamptz
         AND t.id NOT IN (SELECT transaction_id FROM ${table(db, 'reconciliation_links')} r WHERE r.company_id = $1)
@@ -223,8 +223,13 @@ export async function propose(db: LedgerDb, companyId: string, line: StatementLi
 
   // 7. Keywords.
   if (direction === 'out') {
-    for (const [re, code, what] of KEYWORDS) {
-      if (re.test(text)) return { kind: 'create', confidence: 62, accountCode: code, reason: `The payee looks like ${what}; ${code} is the usual account. Confirming makes it a rule.` };
+    for (const [re, role, what] of KEYWORDS) {
+      if (!re.test(text)) continue;
+      // The keyword table names roles; this company's own code for that role is
+      // what goes on the proposal, because the proposal is what gets stored,
+      // shown and posted.
+      const code = await resolveCode(db, companyId, role);
+      return { kind: 'create', confidence: 62, accountCode: code, reason: `The payee looks like ${what}; ${code} is the usual account. Confirming makes it a rule.` };
     }
   }
 
@@ -274,6 +279,12 @@ export interface ApplyResult { lineId: string; status: string; transactionId: st
 
 /** Carry out a decision for one line. Every posting is an ordinary, reversible ledger transaction with the reason on it. */
 export async function apply(db: LedgerDb, companyId: string, lineId: string, decision: Decision & { invoiceId?: string; reason?: string }, by = 'board'): Promise<ApplyResult> {
+  // The caller may name a role rather than a code: an agent proposing "put it
+  // to model inference" should not have to know this company's numbering, and
+  // what gets written into a rule has to be a code.
+  if (decision.kind === 'create' && decision.accountCode) {
+    decision = { ...decision, accountCode: await resolveCode(db, companyId, decision.accountCode) };
+  }
   const line = await getStatementLine(db, companyId, lineId);
   if (!line) throw new LedgerError(`statement line ${lineId} not found`, 'invalid');
   if (line.status !== 'unreconciled') throw new LedgerError(`line is already ${line.status}`, 'invalid');
@@ -335,7 +346,7 @@ export async function apply(db: LedgerDb, companyId: string, lineId: string, dec
     const txId = paymentTx[0]?.id ?? null;
     if (txId) await linkTransactions(db, companyId, lineId, [txId]);
     await markLine(db, companyId, lineId, 'created', txId, by);
-    await learn(db, companyId, line, ACCOUNT.RECEIVABLES, inv.customerName);
+    await learn(db, companyId, line, await resolveCode(db, companyId, ACCOUNT.RECEIVABLES), inv.customerName);
     return { lineId, status: 'created', transactionId: txId };
   }
   const code = decision.accountCode;

@@ -36,7 +36,7 @@ let supplierId: string;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   const s = await createSupplier(db, CO, { name: 'Hetzner', email: 'billing@hetzner.example', defaultAccountCode: ACCOUNT.COMPUTE_AND_SANDBOXES });
   supplierId = s.id;
 });
@@ -62,9 +62,9 @@ describe('bills', () => {
     expect(b.subtotalMinor).toBe('1440');
     expect(b.taxMinor).toBe('274');
     expect(b.totalMinor).toBe('1714');
-    expect(b.lines[0]!.accountCode).toBe(ACCOUNT.COMPUTE_AND_SANDBOXES);
-    expect(b.lines[1]!.accountCode).toBe(ACCOUNT.TOOLS_AND_APIS);
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(0n);
+    expect(b.lines[0]!.accountCode).toBe('5200');
+    expect(b.lines[1]!.accountCode).toBe('5100');
+    expect(await balanceOf(db, CO, '2000')).toBe(0n);
   });
 
   it('approves: expense per account, tax to 2100, payable for the total', async () => {
@@ -72,10 +72,10 @@ describe('bills', () => {
     const a = await approveBill(db, CO, b.id, { createdBy: 'tester' });
     expect(a.status).toBe('approved');
     expect(a.outstandingMinor).toBe('1714');
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(1_714n);
-    expect(await balanceOf(db, CO, ACCOUNT.TAX_PAYABLE)).toBe(-274n); // liability with a debit balance: tax to reclaim
-    expect(await balanceOf(db, CO, ACCOUNT.COMPUTE_AND_SANDBOXES)).toBe(1_200n);
-    expect(await balanceOf(db, CO, ACCOUNT.TOOLS_AND_APIS)).toBe(240n);
+    expect(await balanceOf(db, CO, '2000')).toBe(1_714n);
+    expect(await balanceOf(db, CO, '2100')).toBe(-274n); // liability with a debit balance: tax to reclaim
+    expect(await balanceOf(db, CO, '5200')).toBe(1_200n);
+    expect(await balanceOf(db, CO, '5100')).toBe(240n);
     const tx = await getTransaction(db, CO, a.transactionId!);
     expect(tx?.sourceKind).toBe('bill');
     expect(tx?.entries.length).toBe(4);
@@ -91,8 +91,8 @@ describe('bills', () => {
     expect((await payBill(db, CO, b.id, { amountMinor: 700n, reference: 'wire-1' })).paidMinor).toBe('1000'); // same reference again is a no-op
     const p2 = await payBill(db, CO, b.id, { occurredAt: '2026-08-12T00:00:00Z', reference: 'wire-2' });
     expect(p2.status).toBe('paid');
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(0n);
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(-1_714n);
+    expect(await balanceOf(db, CO, '2000')).toBe(0n);
+    expect(await balanceOf(db, CO, '1000')).toBe(-1_714n);
     await expect(payBill(db, CO, b.id, { amountMinor: 1n })).rejects.toThrow(/only an approved bill/);
   });
 
@@ -109,11 +109,11 @@ describe('bills', () => {
 
     const b = await createBill(db, CO, { supplierId, issuedAt: '2026-08-20T00:00:00Z', lines: [{ description: 'Mistake', unitAmountMinor: 5_000n }] });
     await approveBill(db, CO, b.id);
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(5_000n);
+    expect(await balanceOf(db, CO, '2000')).toBe(5_000n);
     const v = await voidBill(db, CO, b.id, { reason: 'duplicate' });
     expect(v.status).toBe('void');
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(0n);
-    expect(await balanceOf(db, CO, ACCOUNT.COMPUTE_AND_SANDBOXES)).toBe(1_200n);
+    expect(await balanceOf(db, CO, '2000')).toBe(0n);
+    expect(await balanceOf(db, CO, '5200')).toBe(1_200n);
     const tb = await trialBalanceReport(db, CO);
     expect(tb.balances).toBe(true);
   });
@@ -129,11 +129,11 @@ describe('bills', () => {
   it('books a foreign-currency bill at the bill rate and the difference at payment to 4900', async () => {
     const b = await createBill(db, CO, { supplierId, currency: 'EUR', rateToBase: '1.10', issuedAt: '2026-08-25T00:00:00Z', lines: [{ description: 'EU thing', unitAmountMinor: 10_000n }] });
     await approveBill(db, CO, b.id);
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(11_000n);
+    expect(await balanceOf(db, CO, '2000')).toBe(11_000n);
     const p = await payBill(db, CO, b.id, { rateToBase: '1.05', reference: 'sepa-1' });
     expect(p.status).toBe('paid');
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(0n);
-    expect(await balanceOf(db, CO, ACCOUNT.CURRENCY_GAINS)).toBe(500n);
+    expect(await balanceOf(db, CO, '2000')).toBe(0n);
+    expect(await balanceOf(db, CO, '4900')).toBe(500n);
   });
 
   it('a conversion bill is approved without posting and pays down normally', async () => {
@@ -145,7 +145,7 @@ describe('bills', () => {
     const before = await balanceOf(db, CO, ACCOUNT.PAYABLES);
     const p = await payBill(db, CO, b.id, { reference: 'old-pay' });
     expect(p.status).toBe('paid');
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(before - 600n);
+    expect(await balanceOf(db, CO, '2000')).toBe(before - 600n);
   });
 });
 
@@ -177,12 +177,12 @@ describe('invoices with tax and line accounts', () => {
     expect(inv.totalMinor).toBe('12500');
     expect(inv.reference).toBe('PO-9');
     await issueInvoice(db, CO, inv.id, { issuedAt: '2026-08-28T00:00:00Z' });
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(12_500n);
-    expect(await balanceOf(db, CO, ACCOUNT.SERVICE_INCOME)).toBe(10_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.TAX_PAYABLE)).toBe(-274n + 2_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(12_500n);
+    expect(await balanceOf(db, CO, '4000')).toBe(10_000n);
+    expect(await balanceOf(db, CO, '2100')).toBe(-274n + 2_000n);
     const paid = await recordPayment(db, CO, inv.id, { amountMinor: 12_500n, reference: 'p' });
     expect(paid.status).toBe('paid');
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(0n);
+    expect(await balanceOf(db, CO, '1100')).toBe(0n);
   });
 
   it('a conversion invoice is issued without posting and honours the opening paid amount', async () => {
@@ -193,10 +193,10 @@ describe('invoices with tax and line accounts', () => {
     const issued = await issueInvoice(db, CO, inv.id, { issuedAt: '2025-11-30T00:00:00Z' });
     expect(issued.status).toBe('part_paid');
     expect(issued.outstandingMinor).toBe('7500');
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before);
+    expect(await balanceOf(db, CO, '1100')).toBe(before);
     const paid = await recordPayment(db, CO, inv.id, { amountMinor: 7_500n, reference: 'late' });
     expect(paid.status).toBe('paid');
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before - 7_500n);
+    expect(await balanceOf(db, CO, '1100')).toBe(before - 7_500n);
     await expect(createInvoice(db, CO, { customerId: c.id, currency: 'USD', number: 'INV-2025-118', lines: [{ description: 'dup', unitAmountMinor: 1n }] })).rejects.toThrow(/already exists/);
   });
 });

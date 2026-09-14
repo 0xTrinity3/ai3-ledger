@@ -21,7 +21,7 @@ const calls: string[] = [];
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   deps = {
     db,
     baseCurrency: 'USD',
@@ -224,7 +224,7 @@ describe('briefing', () => {
     expect(b!.items[0]!.line).toMatch(/No payment options are set/); // first, because open invoices cannot be paid
     expect(b!.body).toMatch(/Position on 2026-12-01/);
     const quiet = '99999999-9999-4999-8999-999999999999';
-    await seedAccounts(db, quiet, 'USD');
+    await seedAccounts(db, quiet, 'USD', { version: 1 });
     expect(await buildBriefing(db, quiet)).toBeNull();
   });
 });

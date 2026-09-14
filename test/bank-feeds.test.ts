@@ -63,7 +63,7 @@ function connection(over: Partial<BankConnectionView> = {}): BankConnectionView 
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'GBP');
+  await seedAccounts(db, CO, 'GBP', { version: 1 });
   settings = await updateSettings(db, CO, { baseCurrency: 'GBP', ai3Key: 'ai3k_test', ai3Origin: 'https://ai3.test' });
   status = { providers: { plaid: true, gocardless: true }, connectUrl: CONNECT_URL, connections: [connection()] };
 });

@@ -30,7 +30,7 @@ let db: PluginTestDb;
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
   await postTransaction(db, {
     companyId: CO, occurredAt: '2026-08-01T00:00:00Z', sourcePlatform: 'manual', sourceKind: 'funding', sourceRef: 'fund-1', currency: 'USD', description: 'Funding',
     entries: [
@@ -57,13 +57,13 @@ describe('journals', () => {
     expect(j.number).toBe('JNL-0001');
     expect(j.status).toBe('draft');
     expect(j.debitMinor).toBe('4500');
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(0n);
+    expect(await balanceOf(db, CO, '2000')).toBe(0n);
 
     const posted = await postJournal(db, CO, j.id, { createdBy: 'tester' });
     expect(posted.status).toBe('posted');
     expect(posted.transactionId).toBeTruthy();
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(4_500n);
-    expect(await balanceOf(db, CO, ACCOUNT.COMPUTE_AND_SANDBOXES)).toBe(4_500n);
+    expect(await balanceOf(db, CO, '2000')).toBe(4_500n);
+    expect(await balanceOf(db, CO, '5200')).toBe(4_500n);
     // posting twice is a no-op
     expect((await postJournal(db, CO, j.id)).transactionId).toBe(posted.transactionId);
     const back = await journalForTransaction(db, CO, posted.transactionId!);
@@ -78,7 +78,7 @@ describe('journals', () => {
       { accountCode: ACCOUNT.TREASURY, direction: 'debit', amountMinor: 1n },
       { accountCode: ACCOUNT.PAYABLES, direction: 'credit', amountMinor: 2n },
     ] })).rejects.toThrow(/does not balance/);
-    await expect(createJournal(db, CO, { occurredAt: '2026-08-10T00:00:00Z', lines: [{ accountCode: ACCOUNT.TREASURY, direction: 'debit', amountMinor: 1n }] })).rejects.toThrow(/at least two/);
+    await expect(createJournal(db, CO, { occurredAt: '2026-08-10T00:00:00Z', lines: [{ accountCode: '1000', direction: 'debit', amountMinor: 1n }] })).rejects.toThrow(/at least two/);
     await expect(createJournal(db, CO, { occurredAt: '2026-08-10T00:00:00Z', lines: [
       { accountCode: '7777', direction: 'debit', amountMinor: 1n },
       { accountCode: ACCOUNT.PAYABLES, direction: 'credit', amountMinor: 1n },
@@ -109,7 +109,7 @@ describe('journals', () => {
     const v = await voidJournal(db, CO, j.id, { createdBy: 'tester', reason: 'accrued twice' });
     expect(v.status).toBe('voided');
     expect(v.reversalId).toBeTruthy();
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(0n);
+    expect(await balanceOf(db, CO, '2000')).toBe(0n);
     const tx = await getTransaction(db, CO, j.transactionId!);
     expect(tx?.reversedBy).toBe(v.reversalId);
     const rev = await getTransaction(db, CO, v.reversalId!);
@@ -136,19 +136,19 @@ describe('trial balance', () => {
     const tb = await trialBalanceReport(db, CO, '2026-08-31T23:59:59Z');
     expect(tb.balances).toBe(true);
     expect(tb.debitMinor).toBe(tb.creditMinor);
-    const treasury = tb.lines.find((l) => l.code === ACCOUNT.TREASURY)!;
+    const treasury = tb.lines.find((l) => l.code === '1000')!;
     expect(treasury.debitMinor).toBe('100000');
     expect(treasury.creditMinor).toBe('0');
-    const funds = tb.lines.find((l) => l.code === ACCOUNT.CONTRIBUTED_FUNDS)!;
+    const funds = tb.lines.find((l) => l.code === '3000')!;
     expect(funds.creditMinor).toBe('101999');
-    expect(tb.lines.find((l) => l.code === ACCOUNT.PAYABLES)).toBeUndefined(); // voided journal nets to zero
+    expect(tb.lines.find((l) => l.code === '2000')).toBeUndefined(); // voided journal nets to zero
     expect(tb.lines.map((l) => l.code)).toEqual([...tb.lines.map((l) => l.code)].sort());
   });
 
   it('limits to a window when asked', async () => {
     const tb = await trialBalanceReport(db, CO, '2026-08-31T23:59:59Z', '2026-08-15T00:00:00Z');
-    expect(tb.lines.find((l) => l.code === ACCOUNT.TREASURY)).toBeUndefined();
-    expect(tb.lines.find((l) => l.code === ACCOUNT.TOOLS_AND_APIS)?.debitMinor).toBe('1999');
+    expect(tb.lines.find((l) => l.code === '1000')).toBeUndefined();
+    expect(tb.lines.find((l) => l.code === '5100')?.debitMinor).toBe('1999');
   });
 });
 

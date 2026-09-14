@@ -1,3 +1,5 @@
+import { ACCOUNT } from './accounts.js';
+
 /**
  * The platform boundary.
  *
@@ -57,16 +59,22 @@ export interface CostSource {
   read(companyId: string, cursor: CostCursor, limit: number): Promise<CostBatch>;
 }
 
-/** Category to expense account code. Unknown falls through to Other operating rather than being dropped. */
+/**
+ * Category to expense account. A role rather than a number, because which
+ * number carries model inference is a fact about the company's chart:
+ * `postTransaction` turns it into that company's own code.
+ *
+ * Unknown falls through to other operating rather than being dropped.
+ */
 export function expenseAccountFor(category: CostCategory): string {
   switch (category) {
     case 'model':
-      return '5000';
+      return ACCOUNT.MODEL_INFERENCE;
     case 'tool':
-      return '5100';
+      return ACCOUNT.TOOLS_AND_APIS;
     case 'compute':
-      return '5200';
+      return ACCOUNT.COMPUTE_AND_SANDBOXES;
     default:
-      return '5900';
+      return ACCOUNT.OTHER_OPERATING;
   }
 }

@@ -1,0 +1,12 @@
+-- Which chart of accounts a company is keeping.
+--
+-- The core used to post to hard-coded numbers: receivables *were* 1100. That
+-- made the default chart unchangeable, because changing it would silently
+-- repoint every future posting of every existing company at whatever else now
+-- sat on that number.
+--
+-- Receivables at 1100 in one company and 1200 in another is an ordinary fact
+-- about charts of accounts. This column is how the ledger holds both at once:
+-- 1 is the original chart, 2 is the one a company opened from 2026-09-14 gets.
+-- Existing rows default to 1, which is what they have.
+ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS chart_version integer NOT NULL DEFAULT 1;

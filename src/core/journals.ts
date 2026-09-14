@@ -7,7 +7,7 @@
  * journal shows as voided with a link to the reversing transaction. Numbers
  * are JNL-0001 upwards per company. Nothing here knows about Paperclip.
  */
-import { LedgerError, postReversal, postTransaction, validatePost, type Direction, type Subject } from './ledger.js';
+import { LedgerError, postReversal, postTransaction, validatePost, type Direction, type Subject, resolveCode} from './ledger.js';
 import { assertPositiveMinor, fromMinor, newId, table, toIso, toMinor, type LedgerDb, type Minor } from './sql.js';
 
 export type JournalStatus = 'draft' | 'posted' | 'voided';
@@ -90,7 +90,9 @@ function normaliseLines(lines: JournalLineInput[]): Array<{ position: number; co
 }
 
 async function assertAccountsExist(db: LedgerDb, companyId: string, codes: string[]): Promise<void> {
-  const unique = [...new Set(codes)];
+  // A role is a real code once this company has been asked which one it means.
+  const resolved = await Promise.all(codes.map((c) => resolveCode(db, companyId, c)));
+  const unique = [...new Set(resolved)];
   const rows = await db.sql.query<{ code: string }>(
     `SELECT code FROM ${table(db, 'accounts')} WHERE company_id = $1 AND code = ANY(string_to_array($2::text, ','))`,
     [companyId, unique.join(',')],
@@ -98,6 +100,11 @@ async function assertAccountsExist(db: LedgerDb, companyId: string, codes: strin
   const found = new Set(rows.map((r) => r.code));
   const missing = unique.filter((c) => !found.has(c));
   if (missing.length) throw new LedgerError(`unknown account code${missing.length === 1 ? '' : 's'} ${missing.join(', ')}`, 'unknown_account');
+}
+
+/** Roles become this company's codes before a line is stored or posted. */
+async function resolveLines<T extends { code: string }>(db: LedgerDb, companyId: string, lines: T[]): Promise<T[]> {
+  return Promise.all(lines.map(async (l) => ({ ...l, code: await resolveCode(db, companyId, l.code) })));
 }
 
 async function nextJournalNumber(db: LedgerDb, companyId: string): Promise<string> {
@@ -123,7 +130,7 @@ async function writeLines(db: LedgerDb, journalId: string, lines: ReturnType<typ
 export async function createJournal(db: LedgerDb, companyId: string, input: CreateJournalInput): Promise<Journal> {
   const occurredAt = toIso(input.occurredAt);
   if (Number.isNaN(Date.parse(occurredAt))) throw new LedgerError('occurredAt must be a date', 'invalid');
-  const lines = normaliseLines(input.lines);
+  const lines = await resolveLines(db, companyId, normaliseLines(input.lines));
   await assertAccountsExist(db, companyId, lines.map((l) => l.code));
   const id = newId();
   const publicId = newId();
@@ -164,7 +171,7 @@ export async function updateJournal(
   if (!j) throw new LedgerError(`journal ${id} not found for company ${companyId}`, 'invalid');
   if (j.status !== 'draft') throw new LedgerError(`${j.number} is ${j.status}; only a draft can be edited`, 'invalid');
   if (input.lines) {
-    const lines = normaliseLines(input.lines);
+    const lines = await resolveLines(db, companyId, normaliseLines(input.lines));
     await assertAccountsExist(db, companyId, lines.map((l) => l.code));
     await db.sql.execute(`DELETE FROM ${table(db, 'journal_lines')} WHERE journal_id = $1::uuid`, [id]);
     await writeLines(db, id, lines);

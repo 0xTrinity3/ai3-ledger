@@ -29,6 +29,8 @@ import {
   type LedgerDb,
   type ParsedLine,
   type StripeLink,
+  resolveCode,
+
 } from '../core/index.js';
 import { ai3Call, isConnected, type FetchLike } from './ai3.js';
 
@@ -191,7 +193,9 @@ export async function payInvoiceByCard(db: LedgerDb, fetch: FetchLike, settings:
   if (!isConnected(settings)) throw new LedgerError('paying by card needs the ai3.co connection (Finance › Settings)', 'invalid');
   const r = (await ai3Call(fetch, settings, '/api/ledger/stripe/pay', { companyId, invoiceUrl: input.invoiceUrl, amountMinor: input.amountCents === null ? undefined : input.amountCents.toString() })) as { paymentIntentId: string; status: string; amountMinor: string; currency: string; invoiceNumber: string; seller: string; feeMinor: string; at: string; card: { brand: string; last4: string | null } | null };
   const amount = BigInt(r.amountMinor);
-  const code = input.accountCode ?? ACCOUNT.OTHER_OPERATING;
+  // Resolved here rather than at posting, because the code is also reported
+  // back to the caller and put on the record.
+  const code = await resolveCode(db, companyId, input.accountCode ?? ACCOUNT.OTHER_OPERATING);
   const bank = await ensureCardAccount(db, companyId, r.currency);
   await postTransaction(db, {
     companyId, occurredAt: new Date(r.at || Date.now()), description: input.description ?? `Invoice ${r.invoiceNumber} from ${r.seller} · card`,

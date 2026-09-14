@@ -16,7 +16,7 @@
  * the imported trial balance.
  */
 import { ACCOUNT } from './accounts.js';
-import { LedgerError, findTransactionBySourceRef, postReversal, postTransaction, type EntryInput, type Subject } from './ledger.js';
+import { LedgerError, findTransactionBySourceRef, postReversal, postTransaction, resolveCode, resolveLineAccounts, type EntryInput, type Subject } from './ledger.js';
 import { parseRate, toBase } from './invoices.js';
 import { getSettings } from './settings.js';
 import { assertCurrency, assertPositiveMinor, fromMinor, newId, table, toIso, toMinor, type LedgerDb, type Minor } from './sql.js';
@@ -258,7 +258,7 @@ export async function createBill(db: LedgerDb, companyId: string, input: CreateB
   }
   const supplier = await getSupplier(db, companyId, input.supplierId);
   if (!supplier) throw new LedgerError(`supplier ${input.supplierId} not found for company ${companyId}`, 'invalid');
-  const lines = normaliseLines(input.lines, supplier.defaultAccountCode ?? ACCOUNT.OTHER_OPERATING);
+  const lines = await resolveLineAccounts(db, companyId, normaliseLines(input.lines, supplier.defaultAccountCode ?? await resolveCode(db, companyId, ACCOUNT.OTHER_OPERATING)));
   await assertAccounts(db, companyId, lines.map((l) => l.account));
   const subtotal = lines.reduce((s, l) => s + BigInt(l.amount), 0n);
   const tax = lines.reduce((s, l) => s + BigInt(l.tax), 0n);
@@ -317,7 +317,7 @@ export async function updateBill(
   let subtotal = toMinor(bill.subtotalMinor);
   let tax = toMinor(bill.taxMinor);
   if (input.lines) {
-    const lines = normaliseLines(input.lines, supplier.defaultAccountCode ?? ACCOUNT.OTHER_OPERATING);
+    const lines = await resolveLineAccounts(db, companyId, normaliseLines(input.lines, supplier.defaultAccountCode ?? await resolveCode(db, companyId, ACCOUNT.OTHER_OPERATING)));
     await assertAccounts(db, companyId, lines.map((l) => l.account));
     await db.sql.execute(`DELETE FROM ${table(db, 'bill_lines')} WHERE bill_id = $1::uuid`, [id]);
     await writeLines(db, id, lines);
@@ -515,7 +515,7 @@ export async function payBill(
   const diff = reliefBase - cashBase; // positive: paid less base than owed, a gain
   const ref = (input.reference ?? '').trim() || newId();
   const occurredAt = toIso(input.occurredAt ?? new Date());
-  const cash = input.cashAccountCode?.trim() || ACCOUNT.TREASURY;
+  const cash = await resolveCode(db, companyId, input.cashAccountCode?.trim() || ACCOUNT.TREASURY);
   await assertAccounts(db, companyId, [cash]);
   const paymentId = newId();
   const inserted = await db.sql.execute(

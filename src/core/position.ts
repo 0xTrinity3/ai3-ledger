@@ -4,7 +4,7 @@
  * empty (acceptance criterion 9), it is simply zero.
  */
 import { ACCOUNT, type AccountType } from './accounts.js';
-import { accountBalances, trialBalance, type AccountBalance } from './ledger.js';
+import { accountBalances, accountsOf, trialBalance, type AccountBalance } from './ledger.js';
 import { fromMinor, type LedgerDb, type Minor } from './sql.js';
 
 export interface PositionAccount {
@@ -51,8 +51,9 @@ export async function position(db: LedgerDb, companyId: string, now: Date = new 
   ]);
 
   // Treasury is the control account plus every bank sub-account under it.
-  const treasuryRow = all.find((r) => r.code === ACCOUNT.TREASURY);
-  const treasury = all.filter((r) => r.code === ACCOUNT.TREASURY || (treasuryRow && r.parentId === treasuryRow.accountId)).reduce((s, r) => s + r.balanceMinor, 0n);
+  const roles = await accountsOf(db, companyId);
+  const treasuryRow = all.find((r) => r.code === roles[ACCOUNT.TREASURY]);
+  const treasury = all.filter((r) => r.code === roles[ACCOUNT.TREASURY] || (treasuryRow && r.parentId === treasuryRow.accountId)).reduce((s, r) => s + r.balanceMinor, 0n);
   const income = sumType(mtd, 'income');
   const expense = sumType(mtd, 'expense');
   const trailingExpense = sumType(trailing, 'expense');
@@ -69,8 +70,8 @@ export async function position(db: LedgerDb, companyId: string, now: Date = new 
     currency: all[0]?.currency ?? null,
     asOf: asOf.toISOString(),
     treasuryMinor: fromMinor(treasury),
-    receivablesMinor: fromMinor(code(all, ACCOUNT.RECEIVABLES)),
-    payablesMinor: fromMinor(code(all, ACCOUNT.PAYABLES)),
+    receivablesMinor: fromMinor(code(all, roles[ACCOUNT.RECEIVABLES]!)),
+    payablesMinor: fromMinor(code(all, roles[ACCOUNT.PAYABLES]!)),
     monthToDate: {
       fromDate: monthStart.toISOString(),
       incomeMinor: fromMinor(income),

@@ -95,7 +95,7 @@ describe('statement reading', () => {
 describe('bank accounts and lines', () => {
   beforeAll(async () => {
     db = await openPluginTestDb();
-    await seedAccounts(db, CO, 'USD');
+    await seedAccounts(db, CO, 'USD', { version: 1 });
   });
   afterAll(async () => {
     await db.close();
@@ -157,14 +157,14 @@ describe('bank accounts and lines', () => {
     const gh = (await listStatementLines(db, CO, bankId)).find((l) => l.description.includes('GITHUB'))!;
     const p = await propose(db, CO, gh);
     expect(p.kind).toBe('create');
-    expect(p.accountCode).toBe(ACCOUNT.TOOLS_AND_APIS);
+    expect(p.accountCode).toBe('5100');
     expect(p.confidence).toBe(62);
     await applyDecision(db, CO, gh.id, { kind: 'create', accountCode: ACCOUNT.TOOLS_AND_APIS });
     const rules = await listRules(db, CO);
     expect(rules.length).toBe(1);
     expect(rules[0]!.payeeContains).toBe('github inc');
-    expect(rules[0]!.accountCode).toBe(ACCOUNT.TOOLS_AND_APIS);
-    expect(await balanceOf(db, CO, ACCOUNT.TOOLS_AND_APIS)).toBe(400n);
+    expect(rules[0]!.accountCode).toBe('5100');
+    expect(await balanceOf(db, CO, '5100')).toBe(400n);
     // next month the rule fires with a higher confidence
     await importStatementLines(db, CO, bankId, parseStatement('Date,Description,Amount\n2026-10-03,GITHUB INC,-4.00\n').lines);
     const gh2 = (await listStatementLines(db, CO, bankId, { status: 'unreconciled' })).find((l) => l.description.includes('GITHUB'))!;
@@ -180,7 +180,7 @@ describe('bank accounts and lines', () => {
     expect(p.kind).toBe('ask');
     expect(p.options?.map((o) => o.label)).toContain('Funding from the owner');
     await applyDecision(db, CO, tfr.id, p.options![0]!.decision);
-    expect(await balanceOf(db, CO, ACCOUNT.CONTRIBUTED_FUNDS)).toBe(500000n);
+    expect(await balanceOf(db, CO, '3000')).toBe(500000n);
     expect(await balanceOf(db, CO, '1001')).toBe(500000n - 4210n - 400n);
   });
 
@@ -195,7 +195,7 @@ describe('bank accounts and lines', () => {
     expect(p.confidence).toBe(98);
     expect(p.invoiceId).toBe(inv.id);
     await applyDecision(db, CO, line.id, { kind: 'create', accountCode: ACCOUNT.RECEIVABLES, invoiceId: inv.id });
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(0n);
+    expect(await balanceOf(db, CO, '1100')).toBe(0n);
     expect(await balanceOf(db, CO, '1001')).toBe(500000n - 4210n - 400n + 618750n);
     expect((await trialBalance(db, CO)).netMinor).toBe(0n);
   });
@@ -249,7 +249,7 @@ describe('bank accounts and lines', () => {
     const r = await runReconciliation(db, CO, bankId, { threshold: 90, by: 'nightly', autoPost: false });
     expect(r.autoPosted).toBe(0);
     expect(r.leftForReview).toBeGreaterThan(0);
-    expect(await balanceOf(db, CO, ACCOUNT.TOOLS_AND_APIS)).toBe(before);
+    expect(await balanceOf(db, CO, '5100')).toBe(before);
 
     const line = (await listStatementLines(db, CO, bankId, { status: 'unreconciled' })).find((l) => l.description.includes('GITHUB'))!;
     expect(line.proposal, 'the suggestion is still made, so the queue is useful in the morning').toBeTruthy();

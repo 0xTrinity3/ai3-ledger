@@ -9,7 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import { ACCOUNT } from './accounts.js';
-import { LedgerError } from './ledger.js';
+import { LedgerError, resolveCode } from './ledger.js';
 import { assertCurrency, fromMinor, newId, table, toIso, toMinor, type LedgerDb, type Minor } from './sql.js';
 import type { ParsedLine } from './statements.js';
 
@@ -142,7 +142,7 @@ export async function createBankAccount(
   if (!['bank', 'card', 'stripe', 'wallet'].includes(input.kind)) throw new LedgerError('kind must be bank, card, stripe or wallet', 'invalid');
   const currency = assertCurrency(input.currency);
   const feed: BankFeed = input.feed ?? (input.kind === 'stripe' ? 'stripe' : 'upload');
-  const treasury = await db.sql.query<{ id: string }>(`SELECT id FROM ${table(db, 'accounts')} WHERE company_id = $1 AND code = $2`, [companyId, ACCOUNT.TREASURY]);
+  const treasury = await db.sql.query<{ id: string }>(`SELECT id FROM ${table(db, 'accounts')} WHERE company_id = $1 AND code = $2`, [companyId, await resolveCode(db, companyId, ACCOUNT.TREASURY)]);
   const parentId = treasury[0]?.id;
   if (!parentId) throw new LedgerError('seed the chart of accounts first', 'invalid');
   const accountId = newId();

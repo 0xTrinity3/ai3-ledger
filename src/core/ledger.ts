@@ -10,7 +10,10 @@
  *
  * Nothing in this file knows about Paperclip.
  */
-import { ACCOUNT, SEED_ACCOUNTS, normalSide, type AccountType } from './accounts.js';
+import {
+  ACCOUNT, CHARTS, CHART_VERSIONS, CURRENT_CHART, codeFor, isRole, normalSide, rolesOf,
+  type AccountType, type ChartVersion,
+} from './accounts.js';
 import {
   assertCurrency,
   assertPositiveMinor,
@@ -99,10 +102,26 @@ export function validatePost(input: PostInput): { currency: string; entries: Ent
 }
 
 /** Idempotently create the chart of accounts for a company. Returns how many rows were added. */
-export async function seedAccounts(db: LedgerDb, companyId: string, currency: string): Promise<number> {
+export async function seedAccounts(
+  db: LedgerDb,
+  companyId: string,
+  currency: string,
+  opts: { version?: ChartVersion } = {},
+): Promise<number> {
   assertCurrency(currency);
+  // A company that already has a chart keeps it, whatever chart that is. This
+  // runs on every open, so seeding the current default over an existing set
+  // would pour sixty accounts into books that have been using fourteen — and
+  // would move where the core posts, mid-life, for a company with history.
+  const existing = await db.sql.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM ${table(db, 'accounts')} WHERE company_id = $1`,
+    [companyId],
+  );
+  const fresh = Number(existing[0]?.n ?? '0') === 0;
+  const version: ChartVersion = fresh ? (opts.version ?? CURRENT_CHART) : await chartVersionOf(db, companyId);
+
   let added = 0;
-  for (const a of SEED_ACCOUNTS) {
+  for (const a of CHARTS[version].accounts) {
     const r = await db.sql.execute(
       `INSERT INTO ${table(db, 'accounts')} (company_id, code, name, type, currency, is_system)
        VALUES ($1, $2, $3, $4, $5, true)
@@ -111,7 +130,70 @@ export async function seedAccounts(db: LedgerDb, companyId: string, currency: st
     );
     added += r.rowCount;
   }
+
+  if (fresh) {
+    // Written before anything can post, so the first posting already resolves
+    // against the chart this company actually has.
+    await db.sql.execute(
+      `INSERT INTO ${table(db, 'company_settings')} (company_id, base_currency, chart_version)
+       VALUES ($1, $2, $3::int)
+       ON CONFLICT (company_id) DO UPDATE SET chart_version = EXCLUDED.chart_version`,
+      [companyId, currency, version],
+    );
+    versionCache.set(`${db.schema ?? ''}:${companyId}`, version);
+  }
   return added;
+}
+
+/**
+ * Which chart this company keeps.
+ *
+ * Cached: it is asked on every posting and every report, it is written once
+ * when the books are opened, and nothing changes it afterwards. A company with
+ * no settings row predates the column and is on chart 1.
+ */
+const versionCache = new Map<string, ChartVersion>();
+
+export async function chartVersionOf(db: LedgerDb, companyId: string): Promise<ChartVersion> {
+  const key = `${db.schema ?? ''}:${companyId}`;
+  const hit = versionCache.get(key);
+  if (hit) return hit;
+  let version: ChartVersion = 1;
+  try {
+    const rows = await db.sql.query<{ chart_version: number | null }>(
+      `SELECT chart_version FROM ${table(db, 'company_settings')} WHERE company_id = $1`,
+      [companyId],
+    );
+    const v = Number(rows[0]?.chart_version ?? 1);
+    version = CHART_VERSIONS.includes(v as ChartVersion) ? (v as ChartVersion) : 1;
+  } catch {
+    version = 1; // the column is not there yet: this is chart 1 by definition
+  }
+  versionCache.set(key, version);
+  return version;
+}
+
+/** Forget what we know, for a test that opens several ledgers in one process. */
+export function forgetChartVersions(): void {
+  versionCache.clear();
+}
+
+/** The code this company uses for a role. Anything that is not a role is returned as it came. */
+export async function resolveCode(db: LedgerDb, companyId: string, code: string): Promise<string> {
+  if (!isRole(code)) return code;
+  return codeFor(code, await chartVersionOf(db, companyId));
+}
+
+/** Resolve the account on each document line, so what is stored is always a real code. */
+export async function resolveLineAccounts<T extends { account?: string | null }>(db: LedgerDb, companyId: string, lines: T[]): Promise<T[]> {
+  if (!lines.some((l) => l.account && isRole(l.account))) return lines;
+  const roles = await accountsOf(db, companyId);
+  return lines.map((l) => (l.account && isRole(l.account) ? { ...l, account: roles[l.account] ?? l.account } : l));
+}
+
+/** The whole role map for this company, for callers that need more than one. */
+export async function accountsOf(db: LedgerDb, companyId: string): Promise<Record<string, string>> {
+  return rolesOf(await chartVersionOf(db, companyId));
 }
 
 interface EntryPayload {
@@ -138,7 +220,15 @@ function entryPayload(entries: EntryInput[]): EntryPayload[] {
 
 /** Post a balanced transaction. A duplicate source ref returns the existing id with inserted=false. */
 export async function postTransaction(db: LedgerDb, input: PostInput): Promise<PostResult> {
-  const { currency, entries } = validatePost(input);
+  // Roles become this company's own codes here, which is the only place every
+  // posting in the system passes through.
+  const roles = await accountsOf(db, input.companyId);
+  const resolved: PostInput = {
+    ...input,
+    entries: input.entries.map((e) => (isRole(e.accountCode) ? { ...e, accountCode: roles[e.accountCode] ?? e.accountCode } : e)),
+  };
+  const { currency, entries } = validatePost(resolved);
+  input = resolved;
   const payload = entryPayload(entries);
   if (db.posting === 'statements') return postWithStatements(db, input, currency, payload);
   return postWithFunction(db, input, currency, payload);
@@ -420,11 +510,12 @@ export async function trialBalance(db: LedgerDb, companyId: string): Promise<{ d
   return { debitMinor: debit, creditMinor: credit, netMinor: debit - credit, entryCount: Number(r.n) };
 }
 
-/** Convenience: read one account's signed balance by code. */
+/** Convenience: read one account's signed balance by code, or by role. */
 export async function balanceOf(db: LedgerDb, companyId: string, code: string, asOf?: Date | string): Promise<Minor> {
+  const wanted = await resolveCode(db, companyId, code);
   const all = await accountBalances(db, companyId, asOf);
-  const hit = all.find((a) => a.code === code);
-  if (!hit) throw new LedgerError(`account ${code} not found for company ${companyId}`, 'unknown_account');
+  const hit = all.find((a) => a.code === wanted);
+  if (!hit) throw new LedgerError(`account ${wanted} not found for company ${companyId}`, 'unknown_account');
   return hit.balanceMinor;
 }
 
@@ -605,6 +696,10 @@ const GROUP_COL: Record<'agent' | 'project' | 'goal', string> = { agent: 'subjec
 
 /** Posted entries matching a filter, oldest first, with a running balance. This is what a click on a report figure opens. */
 export async function listEntries(db: LedgerDb, companyId: string, filter: EntryFilter = {}): Promise<EntryList> {
+  // A filter may name a role; the query needs this company's own code.
+  if (filter.accountCode && isRole(filter.accountCode)) {
+    filter = { ...filter, accountCode: await resolveCode(db, companyId, filter.accountCode) };
+  }
   const limit = Math.min(Math.max(Math.floor(filter.limit ?? 500), 1), 5000);
   if (filter.groupBy && !(filter.groupBy in GROUP_COL)) throw new LedgerError('groupBy must be agent, project or goal', 'invalid');
   const groupExpr = filter.groupBy ? `e.${GROUP_COL[filter.groupBy]}` : 'NULL::text';
@@ -739,6 +834,7 @@ export async function getTransaction(db: LedgerDb, companyId: string, id: string
 
 /** Total posted on one side of an account from one platform and kind, for replay-safe cumulative bookings (credits usage). */
 export async function sumPostedBySource(db: LedgerDb, companyId: string, sourcePlatform: string, sourceKind: string, accountCode: string, direction: Direction): Promise<bigint> {
+  accountCode = await resolveCode(db, companyId, accountCode);
   const rows = await db.sql.query<{ total: unknown }>(
     `SELECT COALESCE(SUM(e.amount_minor), 0) AS total FROM ${table(db, 'entries')} e
        JOIN ${table(db, 'transactions')} t ON t.id = e.transaction_id

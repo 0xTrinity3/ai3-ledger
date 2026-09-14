@@ -11,7 +11,9 @@
  * already carry (5000 Model inference against 1300), replay-safe because the
  * reference is the cumulative total.
  */
-import { ACCOUNT, agentTokens, allocate, postTransaction, sumPostedBySource, table, type CompanySettings, type LedgerDb } from '../core/index.js';
+import { ACCOUNT, agentTokens, allocate, postTransaction, sumPostedBySource, table, type CompanySettings, type LedgerDb,
+  resolveCode,
+} from '../core/index.js';
 import { ai3Call, isConnected, type FetchLike } from './ai3.js';
 
 export interface CreditsEntry { at: string; amountMinor: string; kind: string; ref: string | null }

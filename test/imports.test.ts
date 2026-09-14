@@ -66,7 +66,7 @@ Hetzner,R-1002,28/01/2026,11/02/2026,Servers January,1,1250.00,6100,0.00,AUTHORI
 
 beforeAll(async () => {
   db = await openPluginTestDb();
-  await seedAccounts(db, CO, 'USD');
+  await seedAccounts(db, CO, 'USD', { version: 1 });
 });
 
 afterAll(async () => {
@@ -120,9 +120,9 @@ describe('trial balance import', () => {
     expect(openingMoment('2026-01-01')).toBe(r.postedAt);
     expect(r.accountsAdded).toBe(0);
     expect((await getSettings(db, CO)).conversionDate).toBe('2026-01-01');
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(1_250_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(300_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(125_000n);
+    expect(await balanceOf(db, CO, '1000')).toBe(1_250_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(300_000n);
+    expect(await balanceOf(db, CO, '2000')).toBe(125_000n);
     // a P&L from the conversion date is clean; the balance sheet at the conversion date carries everything
     const pnl = await profitAndLoss(db, CO, { from: '2026-01-01T00:00:00Z', to: '2026-01-31T23:59:59Z' });
     expect(pnl.incomeMinor).toBe('0');
@@ -139,12 +139,12 @@ describe('trial balance import', () => {
     await expect(importTrialBalance(db, CO, { conversionDate: '2026-01-01', lines: tb.lines })).rejects.toThrow(/already imported/);
     const undone = await undoTrialBalance(db, CO, { createdBy: 'tester' });
     expect(undone?.reversalId).toBeTruthy();
-    expect(await balanceOf(db, CO, ACCOUNT.TREASURY)).toBe(0n);
+    expect(await balanceOf(db, CO, '1000')).toBe(0n);
     const lopsided = tb.lines.map((l) => (l.code === '6100' ? { ...l, debitMinor: '520000' } : l));
     await expect(importTrialBalance(db, CO, { conversionDate: '2026-01-01', lines: lopsided })).rejects.toThrow(/does not balance/);
     const r = await importTrialBalance(db, CO, { conversionDate: '2026-01-01', lines: lopsided, plugToRetainedEarnings: true });
     expect(r.plugMinor).toBe('-10000');
-    expect(await balanceOf(db, CO, ACCOUNT.RETAINED_EARNINGS)).toBe(-10_000n);
+    expect(await balanceOf(db, CO, '3900')).toBe(-10_000n);
     expect((await trialBalanceReport(db, CO)).balances).toBe(true);
   });
 });
@@ -182,10 +182,10 @@ describe('document import under the conversion rule', () => {
     expect(jan.totalMinor).toBe('276000');
     expect(all.find((i) => i.number === 'INV-2026-02')!.status).toBe('paid');
     // receivables: opening 3000 + Jan 2760 + 150 - 150 paid
-    expect(await balanceOf(db, CO, ACCOUNT.RECEIVABLES)).toBe(before + 276_000n);
+    expect(await balanceOf(db, CO, '1100')).toBe(before + 276_000n);
     expect(await balanceOf(db, CO, '4100')).toBe(income4100 + 230_000n);
-    expect(await balanceOf(db, CO, ACCOUNT.SERVICE_INCOME)).toBe(15_000n); // Gamma had no account column value
-    expect(await balanceOf(db, CO, ACCOUNT.TAX_PAYABLE)).toBe(15_000n + 46_000n); // VAT from the trial balance plus January's tax
+    expect(await balanceOf(db, CO, '4000')).toBe(15_000n); // Gamma had no account column value
+    expect(await balanceOf(db, CO, '2100')).toBe(15_000n + 46_000n); // VAT from the trial balance plus January's tax
     // a second run skips everything as duplicates
     const again = await importDocuments(db, CO, parsed, { createdBy: 'tester' });
     expect(again.created).toBe(0);
@@ -210,8 +210,8 @@ describe('document import under the conversion rule', () => {
     const vercel = bills.find((b) => b.number === 'V-77')!;
     expect(vercel.status).toBe('paid');
     expect(vercel.totalMinor).toBe('2400');
-    expect(vercel.lines[0]!.accountCode).toBe(ACCOUNT.TOOLS_AND_APIS);
-    expect(await balanceOf(db, CO, ACCOUNT.PAYABLES)).toBe(before + 125_000n); // January Hetzner posted; Vercel posted and paid
+    expect(vercel.lines[0]!.accountCode).toBe('5100');
+    expect(await balanceOf(db, CO, '2000')).toBe(before + 125_000n); // January Hetzner posted; Vercel posted and paid
     expect(await balanceOf(db, CO, '6100')).toBe(520_000n + 125_000n);
     expect((await trialBalanceReport(db, CO)).balances).toBe(true);
   });
