@@ -38,6 +38,29 @@ import {
   closePeriod,
   profitAndLoss,
   balanceSheet,
+  trialBalanceReport,
+  listEntries,
+  listJournals,
+  getJournal,
+  createJournal,
+  postJournal,
+  voidJournal,
+  deleteJournal,
+  listSuppliers,
+  createSupplier,
+  listBills,
+  getBill,
+  createBill,
+  approveBill,
+  payBill,
+  voidBill,
+  deleteBill,
+  parseChartCsv,
+  importChart,
+  parseTrialBalanceCsv,
+  importTrialBalance,
+  standingConversion,
+  undoTrialBalance,
   getPeriod,
   listBankAccounts,
   getBankAccount,
@@ -438,6 +461,237 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
         if (!board) return bad('Only the board can void an invoice', 403);
         return json(200, await voidInvoice(l, companyId, id));
       }
+      // ---- everything else a person does to these books ------------------
+      //
+      // Each of these wraps the same core function the plugin's own screens
+      // call. They exist so that a company with a Paperclip instance can be
+      // worked on from ai3.co as well as from inside Paperclip: the books are
+      // one ledger, and which window you look through should not decide what
+      // you are allowed to do.
+      case 'reports.trial-balance': {
+        const asOf = str(input.query['asOf']);
+        const from = str(input.query['from']);
+        return json(200, await trialBalanceReport(l, companyId, asOf ?? new Date(), from));
+      }
+      case 'entries': {
+        const q = input.query;
+        const limitRaw = Number(str(q['limit']) ?? 300);
+        return json(200, await listEntries(l, companyId, {
+          ...(str(q['accountCode']) ? { accountCode: String(str(q['accountCode'])) } : {}),
+          ...(str(q['from']) ? { from: String(str(q['from'])) } : {}),
+          ...(str(q['to']) ? { to: String(str(q['to'])) } : {}),
+          ...(str(q['groupBy']) ? { groupBy: str(q['groupBy']) as 'agent' | 'project' | 'goal' } : {}),
+          ...(str(q['groupKey']) ? { groupKey: String(str(q['groupKey'])) } : {}),
+          withChildren: str(q['withChildren']) !== 'false',
+          limit: Number.isFinite(limitRaw) ? limitRaw : 300,
+        }));
+      }
+
+      case 'journals.list':
+        return json(200, { companyId, journals: await listJournals(l, companyId, { limit: Number(str(input.query['limit']) ?? 200) }) });
+      case 'journals.get': {
+        const j = await getJournal(l, companyId, id);
+        return j ? json(200, j) : bad('Journal not found', 404);
+      }
+      case 'journals.create': {
+        if (!board) return bad('Only the board can write a journal', 403);
+        return json(201, await createJournal(l, companyId, {
+          occurredAt: typeof body['occurredAt'] === 'string' ? body['occurredAt'] : new Date().toISOString(),
+          narration: typeof body['narration'] === 'string' ? body['narration'] : null,
+          lines: Array.isArray(body['lines']) ? (body['lines'] as never[]) : [],
+          post: body['post'] === true,
+          createdBy: who(input),
+        }));
+      }
+      case 'journals.post': {
+        if (!board) return bad('Only the board can post a journal', 403);
+        return json(200, await postJournal(l, companyId, id, { createdBy: who(input) }));
+      }
+      case 'journals.void': {
+        if (!board) return bad('Only the board can reverse a journal', 403);
+        return json(200, await voidJournal(l, companyId, id, {
+          createdBy: who(input),
+          ...(typeof body['reason'] === 'string' ? { reason: body['reason'] } : {}),
+        }));
+      }
+      case 'journals.delete': {
+        if (!board) return bad('Only the board can discard a draft', 403);
+        return json(200, await deleteJournal(l, companyId, id));
+      }
+
+      case 'suppliers.list':
+        return json(200, { companyId, suppliers: await listSuppliers(l, companyId) });
+      case 'suppliers.create': {
+        if (!board) return bad('Only the board can add a supplier', 403);
+        return json(201, await createSupplier(l, companyId, {
+          name: String(body['name'] ?? ''),
+          email: typeof body['email'] === 'string' ? body['email'] : null,
+          defaultAccountCode: typeof body['defaultAccountCode'] === 'string' ? body['defaultAccountCode'] : null,
+        }));
+      }
+      case 'bills.list':
+        return json(200, { companyId, bills: await listBills(l, companyId, { limit: Number(str(input.query['limit']) ?? 200), withLines: true }) });
+      case 'bills.get': {
+        const b = await getBill(l, companyId, id);
+        return b ? json(200, b) : bad('Bill not found', 404);
+      }
+      case 'bills.create':
+        return json(201, await createBill(l, companyId, {
+          supplierId: String(body['supplierId'] ?? ''),
+          currency: typeof body['currency'] === 'string' ? body['currency'] : CURRENCY,
+          lines: Array.isArray(body['lines']) ? (body['lines'] as never[]) : [],
+          ...(typeof body['issuedAt'] === 'string' ? { issuedAt: body['issuedAt'] } : {}),
+          ...(typeof body['dueAt'] === 'string' ? { dueAt: body['dueAt'] } : {}),
+          ...(typeof body['reference'] === 'string' ? { reference: body['reference'] } : {}),
+          ...(body['subject'] && typeof body['subject'] === 'object' ? { subject: body['subject'] as never } : {}),
+          createdBy: who(input),
+        }));
+      case 'bills.approve': {
+        if (!board) return bad('Only the board can approve a bill', 403);
+        return json(200, await approveBill(l, companyId, id, { createdBy: who(input) }));
+      }
+      case 'bills.pay': {
+        if (!board) return bad('Only the board can pay a bill', 403);
+        return json(200, await payBill(l, companyId, id, {
+          amountMinor: body['amountMinor'] === null || body['amountMinor'] === undefined ? null : (body['amountMinor'] as string),
+          ...(typeof body['occurredAt'] === 'string' ? { occurredAt: body['occurredAt'] } : {}),
+          reference: typeof body['reference'] === 'string' ? body['reference'] : null,
+          cashAccountCode: typeof body['cashAccountCode'] === 'string' ? body['cashAccountCode'] : null,
+          createdBy: who(input),
+        }));
+      }
+      case 'bills.void': {
+        if (!board) return bad('Only the board can cancel a bill', 403);
+        return json(200, await voidBill(l, companyId, id, { createdBy: who(input) }));
+      }
+      case 'bills.delete': {
+        if (!board) return bad('Only the board can discard a draft', 403);
+        return json(200, await deleteBill(l, companyId, id));
+      }
+
+      case 'banks.list':
+        return json(200, { companyId, accounts: await listBankAccounts(l, companyId) });
+      case 'banks.create': {
+        if (!board) return bad('Only the board can add a bank account', 403);
+        return json(201, await createBankAccount(l, companyId, {
+          name: String(body['name'] ?? ''),
+          kind: (typeof body['kind'] === 'string' ? body['kind'] : 'bank') as never,
+          currency: typeof body['currency'] === 'string' ? body['currency'] : CURRENCY,
+          feed: 'upload',
+        }));
+      }
+      case 'banks.lines': {
+        const status = str(input.query['status']);
+        return json(200, {
+          companyId,
+          bankAccountId: id,
+          lines: await listStatementLines(l, companyId, id, {
+            ...(status ? { status: status as 'all' } : {}),
+            limit: Number(str(input.query['limit']) ?? 300),
+          }),
+        });
+      }
+      case 'banks.import': {
+        if (!board) return bad('Only the board can import a statement', 403);
+        // The parse is separate from the import so the caller can show it back
+        // before a single row reaches the books; both halves are here because
+        // over HTTP there is one round trip either way.
+        const text = String(body['statement'] ?? '');
+        const parsed = parseStatement(text, typeof body['filename'] === 'string' ? body['filename'] : 'statement.csv',
+          body['dateOrder'] === 'dmy' || body['dateOrder'] === 'mdy' ? { dateOrder: body['dateOrder'] } : {});
+        if (body['preview'] === true) return json(200, { parsed });
+        return json(200, { parsed, result: await importStatementLines(l, companyId, id, parsed.lines) });
+      }
+      case 'reconcile.run': {
+        if (!board) return bad('Only the board can run reconciliation', 403);
+        const settings = await getSettings(l, companyId, CURRENCY);
+        const threshold = Number(body['threshold'] ?? settings.autoReconcileThreshold);
+        return json(200, await runReconciliation(l, companyId, id, {
+          threshold: Number.isFinite(threshold) ? threshold : settings.autoReconcileThreshold,
+          by: `board:${who(input)}`,
+          autoPost: body['autoPost'] === undefined ? settings.autoReconcile : body['autoPost'] !== false,
+        }));
+      }
+      case 'reconcile.decide': {
+        if (!board) return bad('Only the board can reconcile a line', 403);
+        const line = await getStatementLine(l, companyId, id);
+        if (!line) return bad('Statement line not found', 404);
+        let decision = body['decision'] as never;
+        if (body['accept'] === true) {
+          const proposal = line.proposal ?? await propose(l, companyId, line);
+          if (!proposal || proposal.kind === 'ask') return bad('There is nothing to accept: choose an account instead.');
+          decision = decisionOf(proposal) as never;
+        }
+        if (!decision) return bad('A decision is required');
+        return json(200, await applyDecision(l, companyId, id, decision, who(input)));
+      }
+      case 'reconcile.rules':
+        return json(200, { companyId, rules: await listRules(l, companyId) });
+      case 'reconcile.rule': {
+        if (!board) return bad('Only the board can change a rule', 403);
+        await setRuleEnabled(l, companyId, id, body['enabled'] !== false);
+        return json(200, { ok: true });
+      }
+
+      case 'settings.get':
+        return json(200, await getSettings(l, companyId, CURRENCY));
+      case 'settings.update': {
+        if (!board) return bad('Only the board can change these settings', 403);
+        const allowed = ['legalName', 'address', 'email', 'taxId', 'invoiceFooter', 'replyTo',
+          'remindersEnabled', 'leaderboardOptIn', 'autoReconcile', 'autoReconcileThreshold'] as const;
+        const patch: Record<string, unknown> = {};
+        for (const k of allowed) if (k in body) patch[k] = body[k];
+        return json(200, await updateSettings(l, companyId, patch as never));
+      }
+      case 'payments.list':
+        return json(200, { companyId, methods: await listPaymentMethods(l, companyId) });
+      case 'payments.create': {
+        if (!board) return bad('Only the board can add a payment option', 403);
+        return json(201, await createPaymentMethod(l, companyId, {
+          kind: (typeof body['kind'] === 'string' ? body['kind'] : 'other') as never,
+          label: String(body['label'] ?? ''),
+          currency: typeof body['currency'] === 'string' ? body['currency'] : null,
+          details: body['details'] ?? {},
+          isDefault: body['isDefault'] === true,
+        }));
+      }
+      case 'payments.update': {
+        if (!board) return bad('Only the board can change a payment option', 403);
+        return json(200, await updatePaymentMethod(l, companyId, id, {
+          ...(typeof body['label'] === 'string' ? { label: body['label'] } : {}),
+          ...(body['enabled'] === undefined ? {} : { enabled: body['enabled'] !== false }),
+          ...(body['isDefault'] === undefined ? {} : { isDefault: body['isDefault'] === true }),
+          ...(body['details'] === undefined ? {} : { details: body['details'] }),
+        }));
+      }
+
+      case 'import.chart': {
+        if (!board) return bad('Only the board can import a chart of accounts', 403);
+        const parsed = parseChartCsv(String(body['csv'] ?? ''));
+        if (body['preview'] === true) return json(200, { parsed });
+        return json(200, { parsed, result: await importChart(l, companyId, parsed.lines) });
+      }
+      case 'import.opening': {
+        if (!board) return bad('Only the board can post opening balances', 403);
+        const parsed = parseTrialBalanceCsv(String(body['csv'] ?? ''));
+        if (body['preview'] === true) return json(200, { parsed });
+        return json(200, {
+          parsed,
+          result: await importTrialBalance(l, companyId, {
+            conversionDate: String(body['conversionDate'] ?? ''),
+            lines: parsed.lines,
+            createdBy: who(input),
+            plugToRetainedEarnings: body['plugToRetainedEarnings'] === true,
+          }),
+        });
+      }
+      case 'import.standing':
+        return json(200, { companyId, standing: await standingConversion(l, companyId) });
+      case 'import.undo': {
+        if (!board) return bad('Only the board can reverse opening balances', 403);
+        return json(200, { reversed: await undoTrialBalance(l, companyId, { createdBy: who(input) }) });
+      }
+
       default:
         return bad(`Unknown route ${input.routeKey}`, 404);
     }

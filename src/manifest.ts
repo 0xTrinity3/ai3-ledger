@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.17.0',
+  version: '0.18.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -134,6 +134,56 @@ const manifest: PaperclipPluginManifestV1 = {
     { routeKey: 'periods.close', method: 'POST', path: '/periods/:id/close', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
     { routeKey: 'reports.pnl', method: 'GET', path: '/reports/pnl', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
     { routeKey: 'reports.balance-sheet', method: 'GET', path: '/reports/balance-sheet', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'reports.trial-balance', method: 'GET', path: '/reports/trial-balance', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'entries', method: 'GET', path: '/entries', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+
+    // Everything a person does to these books, over HTTP.
+    //
+    // Until now the plugin published the reports and the invoices and kept the
+    // rest to itself, so a company with a Paperclip instance could read its
+    // profit and loss on ai3.co and had to go back into Paperclip to post a
+    // journal, approve a bill or reconcile a statement line. That is not a
+    // decision about where anybody's books belong — it was a gap in this list.
+    //
+    // Every route below wraps the same core function the plugin's own screens
+    // call, with the same board-only rule on anything that writes.
+    { routeKey: 'journals.list', method: 'GET', path: '/journals', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'journals.get', method: 'GET', path: '/journals/:id', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'journals.create', method: 'POST', path: '/journals', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'journals.post', method: 'POST', path: '/journals/:id/post', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'journals.void', method: 'POST', path: '/journals/:id/void', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'journals.delete', method: 'POST', path: '/journals/:id/delete', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+
+    { routeKey: 'suppliers.list', method: 'GET', path: '/suppliers', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'suppliers.create', method: 'POST', path: '/suppliers', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'bills.list', method: 'GET', path: '/bills', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'bills.get', method: 'GET', path: '/bills/:id', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'bills.create', method: 'POST', path: '/bills', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'bills.approve', method: 'POST', path: '/bills/:id/approve', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'bills.pay', method: 'POST', path: '/bills/:id/pay', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'bills.void', method: 'POST', path: '/bills/:id/void', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'bills.delete', method: 'POST', path: '/bills/:id/delete', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+
+    { routeKey: 'banks.list', method: 'GET', path: '/banks', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'banks.create', method: 'POST', path: '/banks', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'banks.lines', method: 'GET', path: '/banks/:id/lines', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'banks.import', method: 'POST', path: '/banks/:id/import', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'reconcile.run', method: 'POST', path: '/banks/:id/reconcile', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'reconcile.decide', method: 'POST', path: '/reconcile/:id/decide', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'reconcile.rules', method: 'GET', path: '/reconcile/rules', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'reconcile.rule', method: 'POST', path: '/reconcile/rules/:id', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+
+    { routeKey: 'settings.get', method: 'GET', path: '/settings', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'settings.update', method: 'POST', path: '/settings', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'payments.list', method: 'GET', path: '/payment-methods', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'payments.create', method: 'POST', path: '/payment-methods', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'payments.update', method: 'POST', path: '/payment-methods/:id', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+
+    { routeKey: 'import.chart', method: 'POST', path: '/import/chart', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'import.opening', method: 'POST', path: '/import/opening-balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+    { routeKey: 'import.standing', method: 'GET', path: '/import/opening-balances', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
+    { routeKey: 'import.undo', method: 'POST', path: '/import/opening-balances/undo', auth: 'board', capability: 'api.routes.register', companyResolution: { from: 'body', key: 'companyId' } },
+
     // M6: the agent tools over plain HTTP, for runs without an MCP gateway. Same
     // functions as the tool declarations; the company skill explains the call.
     { routeKey: 'tools.list', method: 'GET', path: '/tools', auth: 'board-or-agent', capability: 'api.routes.register', companyResolution: { from: 'query', key: 'companyId' } },
