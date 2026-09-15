@@ -52,7 +52,7 @@ import {
   type StatementLine,
 } from '../core/index.js';
 import { isConnected, publishInvoice, sendInvoice, type FetchLike } from './ai3.js';
-import { PATH_USD_SYMBOL, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, pay, requestFaucet, syncWalletFeed } from './tempo.js';
+import { PATH_USD_SYMBOL, TEMPO_NETWORK, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, pay, requestFaucet, syncWalletFeed } from './tempo.js';
 import { connectStripe, payInvoiceByCard, refreshStripe, syncStripeFeed } from './stripe.js';
 import { fetchCredits, syncCredits } from './credits.js';
 import { RecourseError, DISPUTE_CLAUSE, buildBundle, describeRuling, fileDispute, getCase, invoiceForBundle, type CaseRecord, type Ruling } from './recourse.js';
@@ -788,6 +788,24 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
         if (amountCents === null) throw new LedgerError('give an amount', 'invalid');
         if (!memo) memo = description?.slice(0, 32) ?? 'payment';
         const result = await pay(wallet, { to, amountCents, memo });
+        // Tell the seller's online copy. ai3.co trusts nothing from this call:
+        // it reads the receipt from the chain and marks the invoice paid only
+        // for a transfer to the address printed on it. Failing to report is
+        // noted, never fatal — the money has moved and the books say so.
+        let reported: string | null = null;
+        if (url) {
+          try {
+            const r = await deps.fetch(`${url}/paid`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({ txHash: result.txHash, network: TEMPO_NETWORK, from: wallet.address }),
+              signal: AbortSignal.timeout(30_000),
+            });
+            reported = r.ok ? 'the seller\u2019s online copy is marked paid' : `the seller\u2019s online copy was not updated (${r.status}); it will catch up from the chain`;
+          } catch (err) {
+            reported = `the seller\u2019s online copy was not reached (${err instanceof Error ? err.message.slice(0, 80) : String(err)})`;
+          }
+        }
         // Book it: the expense now, the wallet line arrives with the feed and matches this.
         const bank = wallet.bankAccountId ? await getBankAccount(db, companyId, wallet.bankAccountId) : null;
         const code = str(p['accountCode']) ?? ACCOUNT.OTHER_OPERATING;
@@ -795,8 +813,8 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
           await postTransaction(db, { companyId, occurredAt: new Date(), description: description ?? `Paid ${to} · ${memo}`, sourcePlatform: 'tempo', sourceKind: 'payment', sourceRef: `tempo:${result.txHash}`, currency: 'USD', entries: [{ accountCode: code, direction: 'debit', amountMinor: amountCents }, { accountCode: bank.accountCode, direction: 'credit', amountMinor: amountCents }], createdBy: by });
         }
         return {
-          content: `Paid ${minorToMajor(amountCents)} ${PATH_USD_SYMBOL} to ${to}${remote ? ` for invoice ${remote.number} from ${remote.company}` : ''}, memo "${memo}". Transaction ${result.txHash} (${result.explorer}). Booked to ${code}.`,
-          data: { txHash: result.txHash, explorer: result.explorer, to, amount: minorToMajor(amountCents), asset: PATH_USD_SYMBOL, memo, invoice: remote?.number ?? null, accountCode: code },
+          content: `Paid ${minorToMajor(amountCents)} ${PATH_USD_SYMBOL} to ${to}${remote ? ` for invoice ${remote.number} from ${remote.company}` : ''}, memo "${memo}". Transaction ${result.txHash} (${result.explorer}). Booked to ${code}.${reported ? ` ${reported.charAt(0).toUpperCase()}${reported.slice(1)}.` : ''}`,
+          data: { txHash: result.txHash, explorer: result.explorer, to, amount: minorToMajor(amountCents), asset: PATH_USD_SYMBOL, memo, invoice: remote?.number ?? null, accountCode: code, reported },
         };
       }
       case 'dispute-invoice': {
