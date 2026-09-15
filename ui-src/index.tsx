@@ -12,7 +12,7 @@
  * `usePluginAction` (worker actions). The host scopes both to the company on
  * screen, so the page never names a company id itself.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useHostContext, useHostLocation, useHostNavigation, usePluginAction, usePluginData, usePluginToast, ErrorBoundary, Spinner } from '@paperclipai/plugin-sdk/ui';
 import type { PluginPageProps, PluginSidebarProps } from '@paperclipai/plugin-sdk/ui';
 import { BillsTab, EntriesView, ImportTab, JournalsTab, TransactionDetail, TrialBalanceCard, entriesLink } from './books.js';
@@ -2400,7 +2400,7 @@ function ReconcileTab({ companyId, company }: { companyId: string; company: Comp
 // Page + sidebar
 // ---------------------------------------------------------------------------
 
-const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'bills', 'journals', 'statements', 'import', 'settings'] as const;
+const TABS = ['position', 'banks', 'reconcile', 'transactions', 'invoices', 'bills', 'journals', 'statements', 'import', 'settings', 'network'] as const;
 type Tab = (typeof TABS)[number];
 
 
@@ -2509,6 +2509,44 @@ function tabFromSearch(search: string): Tab {
   return (TABS as readonly string[]).includes(t ?? '') ? (t as Tab) : 'position';
 }
 
+/** A path on ai3.co the frame may show: absolute, on this site, no scheme. */
+function networkPath(search: string): string {
+  const p = new URLSearchParams(search).get('p') || '/feed';
+  return /^\/(?!\/)[^\s]*$/.test(p) ? p : '/feed';
+}
+
+/**
+ * The network, inside the company. ai3.co's pages are the content and this
+ * rail is the frame: the page is asked for as a frame, so it arrives without
+ * its own bar and footer, and it reports where it went so the URL here and
+ * the rail's highlight follow a click inside it. Same site, so the person is
+ * signed in there as they are here.
+ */
+function NetworkTab() {
+  const location = useHostLocation();
+  const nav = useHostNavigation();
+  const wanted = networkPath(location.search);
+  const fromFrame = useRef<string | null>(null);
+  const [src, setSrc] = useState(() => `${AI3_ORIGIN}${wanted}`);
+  useEffect(() => {
+    if (fromFrame.current === wanted) return;
+    fromFrame.current = null;
+    setSrc(`${AI3_ORIGIN}${wanted}`);
+  }, [wanted]);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== AI3_ORIGIN || !e.data || e.data.ai3 !== 'nav' || typeof e.data.path !== 'string') return;
+      const path = e.data.path as string;
+      if (path === networkPath(location.search)) return;
+      fromFrame.current = path;
+      nav.navigate(`/ledger?tab=network&p=${encodeURIComponent(path)}`, { replace: true });
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [location.search, nav]);
+  return <iframe className="ai3-frame-view" src={src} title="AI3" />;
+}
+
 export function LedgerPage(_props: PluginPageProps) {
   useStyles();
   const context = useHostContext();
@@ -2518,6 +2556,7 @@ export function LedgerPage(_props: PluginPageProps) {
   const company = usePluginData<Company>('company', companyId ? { companyId } : {});
   const nav = useHostNavigation();
   const payUrl = new URLSearchParams(location.search).get('pay');
+  if (tab === 'network') return <div className="ai3 ai3-frame"><NetworkTab /></div>;
   if (!companyId) return <div className="ai3">Pick a company to see its ledger.</div>;
   return (
     <ErrorBoundary>
@@ -2602,14 +2641,16 @@ const FINANCE_ITEMS: Array<{ label: string; icon: string; to: string; match: (pa
 // The network: what lives on ai3.co and nowhere else, in the same order as
 // ai3.co's own bar, so the two surfaces read as one product with one menu.
 // Opened in this tab, because it is the same product.
-const AI3_ITEMS: Array<{ label: string; icon: string; href: string }> = [
-  { label: 'Feed', icon: 'feed', href: `${AI3_ORIGIN}/feed` },
-  { label: 'Organizations', icon: 'organizations', href: `${AI3_ORIGIN}/organizations` },
-  { label: 'Marketplace', icon: 'marketplace', href: `${AI3_ORIGIN}/market` },
-  { label: 'People', icon: 'people', href: `${AI3_ORIGIN}/people` },
-  { label: 'Leaderboard', icon: 'leaderboard', href: `${AI3_ORIGIN}/leaderboard` },
-  { label: 'Portfolio', icon: 'portfolio', href: `${AI3_ORIGIN}/portfolio` },
+const AI3_ITEMS: Array<{ label: string; icon: string; path: string }> = [
+  { label: 'Feed', icon: 'feed', path: '/feed' },
+  { label: 'Organizations', icon: 'organizations', path: '/organizations' },
+  { label: 'Marketplace', icon: 'marketplace', path: '/market' },
+  { label: 'People', icon: 'people', path: '/people' },
+  { label: 'Leaderboard', icon: 'leaderboard', path: '/leaderboard' },
+  { label: 'Portfolio', icon: 'portfolio', path: '/portfolio' },
 ];
+const networkTo = (path: string) => `/ledger?tab=network&p=${encodeURIComponent(path)}`;
+const networkOn = (search: string, path: string) => tabIs(search, 'network') && (networkPath(search) === path || networkPath(search).startsWith(`${path}/`) || networkPath(search).startsWith(`${path}?`));
 
 const COLLAPSE_KEY = 'ai3.finance.collapsed';
 
@@ -2637,7 +2678,7 @@ export function LedgerSidebarItem(_props: PluginSidebarProps) {
       <div className="ai3-fin-label ai3-fin-ai3"><span>Network</span></div>
       <div className="ai3-fin-links ai3-net-links">
         {AI3_ITEMS.map((item) => (
-          <a key={item.label} href={item.href} className="ai3-side"><Icon name={item.icon} />{item.label}</a>
+          <a key={item.label} {...nav.linkProps(networkTo(item.path))} className={`ai3-side ${networkOn(location.search, item.path) ? 'on' : ''}`}><Icon name={item.icon} />{item.label}</a>
         ))}
       </div>
     </div>

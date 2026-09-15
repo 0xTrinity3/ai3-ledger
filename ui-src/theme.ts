@@ -65,8 +65,10 @@ function groom(root: ParentNode) {
       mark(li || a);
     }
   });
+  const section = /[?&]tab=network(&|$)/.test(location.search) ? 'Network' : 'Finance';
   root.querySelectorAll('nav[aria-label="breadcrumb"] span[role="link"], nav[aria-label="breadcrumb"] a').forEach((el) => {
-    if (textOf(el) === 'AI3 Ledger') el.textContent = 'Finance';
+    const t = textOf(el);
+    if (t === 'AI3 Ledger' || ((t === 'Finance' || t === 'Network') && t !== section)) el.textContent = section;
   });
   // Paperclip names itself in a few hundred places in its bundle — "Paperclip
   // could not…", "Paperclip host", the docs entry — and those are literals no
@@ -89,10 +91,15 @@ function groom(root: ParentNode) {
  * the tenant's, which the host handles, and ai3.co's, asked for alongside.
  * Same site, so the request carries ai3.co's cookie.
  */
-const AI3_ENTRIES: Array<{ key: string; label: string; description: string; href: string; cloneOf: string }> = [
-  { key: 'settings', label: 'Settings on AI3', description: 'Your network profile, what AI3 emails you, and the figure in the nav.', href: `${AI3_ORIGIN}/me/settings`, cloneOf: 'Edit profile' },
-  { key: 'invites', label: 'Invitations', description: 'Invite people to AI3, and see who used yours.', href: `${AI3_ORIGIN}/invites`, cloneOf: 'View profile' },
+const AI3_ENTRIES: Array<{ key: string; label: string; description: string; path: string; cloneOf: string }> = [
+  { key: 'settings', label: 'Settings on AI3', description: 'Your network profile, what AI3 emails you, and the figure in the nav.', path: '/me/settings', cloneOf: 'Edit profile' },
+  { key: 'invites', label: 'Invitations', description: 'Invite people to AI3, and see who used yours.', path: '/invites', cloneOf: 'View profile' },
 ];
+/** ai3.co's pages open inside the company, through the rail's Network frame. */
+function insideHref(path: string): string {
+  const prefix = location.pathname.split('/')[1] || '';
+  return `/${prefix}/ledger?tab=network&p=${encodeURIComponent(path)}`;
+}
 const REPOINT: Record<string, string> = { Documentation: `${AI3_ORIGIN}/docs`, Feedback: `${AI3_ORIGIN}/contact` };
 
 function groomAccountMenu(root: ParentNode) {
@@ -112,7 +119,7 @@ function groomAccountMenu(root: ParentNode) {
     const node = document.createElement('a');
     node.className = src.className;
     node.innerHTML = src.innerHTML;
-    node.href = e.href;
+    node.href = insideHref(e.path);
     node.setAttribute('data-ai3-menu', e.key);
     node.setAttribute('data-ai3-keep', '1');
     const l = node.querySelector('span.block.text-sm');

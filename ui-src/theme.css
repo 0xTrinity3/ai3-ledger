@@ -326,3 +326,7 @@ a[href$="/company/settings/instance/plugins"] { display: none !important; }
    mark, says whose it is, and offers no way to create a second account. */
 svg[viewBox="22.5 22.5 121 27"] { display: none !important; }
 div.mb-8:has(> svg[viewBox="22.5 22.5 121 27"])::before { content: 'AI3'; font-family: var(--ai3-cond); font-weight: 700; font-size: 1.3rem; letter-spacing: 0.16em; color: var(--ai3-teal-deep); }
+
+/* The network inside the company: ai3.co's page fills the frame. */
+.ai3.ai3-frame { max-width: none; padding: 0; margin: 0; }
+.ai3-frame-view { display: block; width: 100%; height: calc(100vh - 3.2rem); border: 0; background: #fff; }
