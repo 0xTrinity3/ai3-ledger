@@ -68,6 +68,16 @@ instead; they are the same functions.
   covers it, otherwise by the card the owner saved on ai3.co through Stripe
   (\`rail\` forces one). If neither works, the reply says what is missing (no
   wallet on the invoice, no card on file, seller without Stripe); pass that on.
+- You pay only inside a spending authority the owner granted on ai3.co.
+  \`pay-invoice\` asks before it moves money; a refusal names the rule (no
+  authority, the inspection window still open, the first payment to a payee
+  needing a person, a cap, an open dispute, a veto) and where the owner can
+  change it. Report the refusal word for word and stop. Never split a
+  payment, pay from another rail, or ask again in a loop to get around it.
+- A delivery this organisation's acceptance agent failed is disputed, not
+  paid: \`dispute-invoice\` with \`verdict\` set to the failed verdict's id
+  (from run_acceptance_check on ai3.co) puts the failed rules and their
+  evidence in the claim. A verdict that passed cannot be disputed this way.
 - Getting paid by card: \`stripe\` tells you whether card payments are on. If
   not, \`stripe\` with \`connect: true\` returns an onboarding link; give it to
   the owner, never open it yourself. Stripe charges, fees and payouts land in

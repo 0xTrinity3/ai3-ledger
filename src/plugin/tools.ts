@@ -54,6 +54,7 @@ import {
 import { isConnected, publishInvoice, sendInvoice, type FetchLike } from './ai3.js';
 import { PATH_USD_SYMBOL, TEMPO_NETWORK, TEMPO_NETWORK_LABEL, balanceCents, ensureWallet, explorerAddress, pay, requestFaucet, syncWalletFeed } from './tempo.js';
 import { connectStripe, payInvoiceByCard, refreshStripe, syncStripeFeed } from './stripe.js';
+import { checkAuthority, claimFromVerdict, fetchVerdict, isAgentActor, reportPayment, type AuthorityDecision } from './authority.js';
 import { fetchCredits, syncCredits } from './credits.js';
 import { RecourseError, DISPUTE_CLAUSE, buildBundle, describeRuling, fileDispute, getCase, invoiceForBundle, type CaseRecord, type Ruling } from './recourse.js';
 import { BOOKS_TOOL_DECLARATIONS, isBooksTool, runBooksTool } from './books-tools.js';
@@ -63,6 +64,13 @@ export interface ToolDeps {
   fetch: FetchLike;
   companyName: (companyId: string) => Promise<string>;
   baseCurrency: string;
+  /** The Tempo rail; the real one unless a test supplies its own. */
+  pay?: typeof pay;
+}
+
+/** The payee a spending authority is granted against: the seller's organization on AI3, else the address. */
+function payeeOf(doc: RemoteInvoice | null, to: string | null): string {
+  return doc?.seller?.orgId ?? doc?.seller?.companyId ?? to ?? 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +168,7 @@ function lineSummary(line: StatementLine): Record<string, unknown> {
 }
 
 /** The machine-readable copy of a hosted invoice on ai3.co (or any host serving the same JSON). */
-export interface RemoteInvoice { number: string; currency: string; totalMinor: string; outstandingMinor: string; issuedAt: string | null; dueAt: string | null; status: string; lines: Array<{ description: string; quantity: string; amountMinor: string }>; notes: string | null; paymentMethods: Array<{ kind: string; label: string; details: Record<string, string> }>; company: { name: string; email: string | null }; disputes: string | null; url: string; /** ai3.co says the seller takes card payments through Stripe */ stripe: { payable: boolean; test?: boolean } | null }
+export interface RemoteInvoice { number: string; currency: string; totalMinor: string; outstandingMinor: string; issuedAt: string | null; dueAt: string | null; status: string; lines: Array<{ description: string; quantity: string; amountMinor: string }>; notes: string | null; paymentMethods: Array<{ kind: string; label: string; details: Record<string, string> }>; company: { name: string; email: string | null }; disputes: string | null; url: string; /** ai3.co says the seller takes card payments through Stripe */ stripe: { payable: boolean; test?: boolean } | null; /** The seller as a spending authority names it: its organization id on AI3, else its company id. */ seller: { companyId: string | null; orgId: string | null; slug: string | null; name: string | null } | null }
 export async function fetchInvoiceDocument(fetch: FetchLike, url: string): Promise<RemoteInvoice> {
   if (!/^https:\/\/[^\s/]+\/i\/[A-Za-z0-9_-]{16,80}$/.test(url.trim())) throw new LedgerError('the invoice link must look like https://ai3.co/i/<token>', 'invalid');
   const r = await fetch(`${url.trim()}.json`, { headers: { accept: 'application/json' } });
@@ -169,7 +177,8 @@ export async function fetchInvoiceDocument(fetch: FetchLike, url: string): Promi
   const inv = (d.invoice ?? d) as Partial<RemoteInvoice>;
   if (!inv.number || !inv.currency) throw new LedgerError('the invoice link did not return an invoice', 'invalid');
   const stripeInfo = (d as { stripe?: { payable?: boolean; test?: boolean } }).stripe;
-  return { number: inv.number, currency: inv.currency, totalMinor: String(inv.totalMinor ?? '0'), outstandingMinor: String(inv.outstandingMinor ?? '0'), issuedAt: inv.issuedAt ?? null, dueAt: inv.dueAt ?? null, status: inv.status ?? 'issued', lines: inv.lines ?? [], notes: inv.notes ?? null, paymentMethods: inv.paymentMethods ?? [], company: { name: inv.company?.name ?? 'Unknown', email: inv.company?.email ?? null }, disputes: inv.disputes ?? null, url: url.trim(), stripe: stripeInfo ? { payable: stripeInfo.payable === true, test: stripeInfo.test === true } : null };
+  const sellerInfo = (d as { seller?: { companyId?: string; orgId?: string | null; slug?: string | null; name?: string | null } }).seller;
+  return { number: inv.number, currency: inv.currency, totalMinor: String(inv.totalMinor ?? '0'), outstandingMinor: String(inv.outstandingMinor ?? '0'), issuedAt: inv.issuedAt ?? null, dueAt: inv.dueAt ?? null, status: inv.status ?? 'issued', lines: inv.lines ?? [], notes: inv.notes ?? null, paymentMethods: inv.paymentMethods ?? [], company: { name: inv.company?.name ?? 'Unknown', email: inv.company?.email ?? null }, disputes: inv.disputes ?? null, url: url.trim(), stripe: stripeInfo ? { payable: stripeInfo.payable === true, test: stripeInfo.test === true } : null, seller: sellerInfo ? { companyId: sellerInfo.companyId ?? null, orgId: sellerInfo.orgId ?? null, slug: sellerInfo.slug ?? null, name: sellerInfo.name ?? null } : null };
 }
 
 /** Find an invoice by id or number, within the company. */
@@ -394,7 +403,7 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
   {
     name: 'pay-invoice',
     displayName: 'Pay an invoice',
-    description: 'Pay an invoice the company received. Two rails: pathUSD from the company wallet on Tempo (invoice number in the transfer memo, so the seller’s books reconcile it), or the card the owner saved on ai3.co through Stripe (the seller must take card payments; the charge lands on their Stripe account with the invoice number). Give the invoice’s online link (an ai3.co/i/… URL) and amount, currency, payee and invoice number are read from it; or give a raw wallet address and amount. rail defaults to auto: the wallet when the invoice offers one and the balance covers it, else the card. Books the payment as an expense.',
+    description: 'Pay an invoice the company received. Two rails: pathUSD from the company wallet on Tempo (invoice number in the transfer memo, so the seller’s books reconcile it), or the card the owner saved on ai3.co through Stripe (the seller must take card payments; the charge lands on their Stripe account with the invoice number). Give the invoice’s online link (an ai3.co/i/… URL) and amount, currency, payee and invoice number are read from it; or give a raw wallet address and amount. rail defaults to auto: the wallet when the invoice offers one and the balance covers it, else the card. Books the payment as an expense. An agent pays only inside a spending authority the owner granted on ai3.co: the tool asks first, and a refusal says which rule and where the owner can change it (the authorities page, or the feed while the inspection window is open). Never work around a refusal.',
     parametersSchema: {
       type: 'object',
       properties: {
@@ -428,9 +437,10 @@ export const TOOL_DECLARATIONS: PluginToolDeclaration[] = [
         breach: { type: 'string', description: 'What was agreed and what went wrong, in plain words.' },
         remedy: { type: 'string', description: 'What you want: refund, payment, reduction.' },
         evidence: { type: 'string', description: 'Anything else the adjudicator should read: delivery notes, messages, dates.' },
+        verdict: { type: 'string', description: 'The id of a failed acceptance verdict recorded at ai3.co (vrd_…). Its failed rules and their evidence become the claim; a verdict that passed is refused.' },
         amount: { ...AMOUNT, description: 'Amount in dispute. Defaults to the invoice’s outstanding amount.' },
       },
-      required: ['breach'],
+      required: [],
       additionalProperties: false,
     },
   },
@@ -762,10 +772,15 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
           if (!doc || !url) throw new LedgerError('paying by card needs the invoice’s online link', 'invalid');
           if (!cardPayable) throw new LedgerError(`invoice ${doc.number} from ${doc.company.name} cannot be paid by card: the seller has not connected Stripe. Pay from the wallet instead, or ask them.`, 'invalid');
           const settings = await getSettings(db, companyId, deps.baseCurrency);
+          // The gate: an agent pays only inside what the owner permitted. A
+          // person on the board is not asked.
+          const gateInput = { companyId, payee: payeeOf(doc, null), payeeName: doc.company.name, amountMinor: requested ?? BigInt(doc.outstandingMinor), currency: doc.currency, invoiceId: doc.number, description: str(p['description']) ?? null };
+          const gate: AuthorityDecision | null = isAgentActor(run.agentId) ? await checkAuthority(deps.fetch, settings, gateInput) : null;
           const r = await payInvoiceByCard(db, deps.fetch, settings, companyId, { invoiceUrl: url, amountCents: requested, description: str(p['description']) ?? null, accountCode: str(p['accountCode']) ?? null, by });
+          const counted = gate ? await reportPayment(deps.fetch, settings, { ...gateInput, amountMinor: BigInt(r.amountMinor), authorityId: gate.authorityId ?? null, rail: 'stripe', chain: null, ref: r.paymentIntentId, approvedBy: gate.by ?? null }) : null;
           return {
-            content: `Paid ${minorToMajor(r.amountMinor)} ${r.currency} by card${r.card ? ` (${r.card.brand} ····${r.card.last4 ?? ''})` : ''} for invoice ${r.invoiceNumber} from ${r.seller} through Stripe. Payment ${r.paymentIntentId}. Booked to ${r.accountCode}.`,
-            data: { rail: 'stripe', paymentIntentId: r.paymentIntentId, amount: minorToMajor(r.amountMinor), currency: r.currency, invoice: r.invoiceNumber, seller: r.seller, fee: minorToMajor(BigInt(r.feeMinor || '0')), accountCode: r.accountCode, at: r.at },
+            content: `Paid ${minorToMajor(r.amountMinor)} ${r.currency} by card${r.card ? ` (${r.card.brand} ····${r.card.last4 ?? ''})` : ''} for invoice ${r.invoiceNumber} from ${r.seller} through Stripe. Payment ${r.paymentIntentId}. Booked to ${r.accountCode}.${counted ? ` ${counted.note.charAt(0).toUpperCase()}${counted.note.slice(1)}.` : ''}`,
+            data: { rail: 'stripe', paymentIntentId: r.paymentIntentId, amount: minorToMajor(r.amountMinor), currency: r.currency, invoice: r.invoiceNumber, seller: r.seller, fee: minorToMajor(BigInt(r.feeMinor || '0')), accountCode: r.accountCode, at: r.at, authorityId: gate?.authorityId ?? null, counted: counted?.ok ?? null },
           };
         }
         const { wallet } = await ensureWallet(db, companyId, deps.baseCurrency);
@@ -787,7 +802,13 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
         if (!to) throw new LedgerError('give an invoice link or a payee address', 'invalid');
         if (amountCents === null) throw new LedgerError('give an amount', 'invalid');
         if (!memo) memo = description?.slice(0, 32) ?? 'payment';
-        const result = await pay(wallet, { to, amountCents, memo });
+        // The gate, same as the card rail. With no invoice link the payee is
+        // the address itself, which is what the owner would authorise.
+        const tempoGateInput = { companyId, payee: payeeOf(doc, to), payeeName: doc?.company.name ?? null, amountMinor: amountCents, currency: 'USD', invoiceId: remote?.number ?? null, description: description ?? null };
+        const settingsForGate = await getSettings(db, companyId, deps.baseCurrency);
+        const tempoGate: AuthorityDecision | null = isAgentActor(run.agentId) ? await checkAuthority(deps.fetch, settingsForGate, tempoGateInput) : null;
+        const result = await (deps.pay ?? pay)(wallet, { to, amountCents, memo });
+        const counted = tempoGate ? await reportPayment(deps.fetch, settingsForGate, { ...tempoGateInput, authorityId: tempoGate.authorityId ?? null, rail: 'tempo', chain: TEMPO_NETWORK, ref: result.txHash, approvedBy: tempoGate.by ?? null }) : null;
         // Tell the seller's online copy. ai3.co trusts nothing from this call:
         // it reads the receipt from the chain and marks the invoice paid only
         // for a transfer to the address printed on it. Failing to report is
@@ -813,13 +834,22 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
           await postTransaction(db, { companyId, occurredAt: new Date(), description: description ?? `Paid ${to} · ${memo}`, sourcePlatform: 'tempo', sourceKind: 'payment', sourceRef: `tempo:${result.txHash}`, currency: 'USD', entries: [{ accountCode: code, direction: 'debit', amountMinor: amountCents }, { accountCode: bank.accountCode, direction: 'credit', amountMinor: amountCents }], createdBy: by });
         }
         return {
-          content: `Paid ${minorToMajor(amountCents)} ${PATH_USD_SYMBOL} to ${to}${remote ? ` for invoice ${remote.number} from ${remote.company}` : ''}, memo "${memo}". Transaction ${result.txHash} (${result.explorer}). Booked to ${code}.${reported ? ` ${reported.charAt(0).toUpperCase()}${reported.slice(1)}.` : ''}`,
-          data: { txHash: result.txHash, explorer: result.explorer, to, amount: minorToMajor(amountCents), asset: PATH_USD_SYMBOL, memo, invoice: remote?.number ?? null, accountCode: code, reported },
+          content: `Paid ${minorToMajor(amountCents)} ${PATH_USD_SYMBOL} to ${to}${remote ? ` for invoice ${remote.number} from ${remote.company}` : ''}, memo "${memo}". Transaction ${result.txHash} (${result.explorer}). Booked to ${code}.${reported ? ` ${reported.charAt(0).toUpperCase()}${reported.slice(1)}.` : ''}${counted ? ` ${counted.note.charAt(0).toUpperCase()}${counted.note.slice(1)}.` : ''}`,
+          data: { txHash: result.txHash, explorer: result.explorer, to, amount: minorToMajor(amountCents), asset: PATH_USD_SYMBOL, memo, invoice: remote?.number ?? null, accountCode: code, reported, authorityId: tempoGate?.authorityId ?? null, counted: counted?.ok ?? null },
         };
       }
       case 'dispute-invoice': {
-        const breach = str(p['breach']);
-        if (!breach) throw new LedgerError('say what went wrong (breach)', 'invalid');
+        let breach = str(p['breach']);
+        let evidenceText = str(p['evidence']) ?? null;
+        const verdictId = str(p['verdict']);
+        if (verdictId) {
+          // The claim is the check: the failed rules and the evidence recorded
+          // when the acceptance agent scored the delivery, not an account of them.
+          const v = await fetchVerdict(deps.fetch, await getSettings(db, companyId, deps.baseCurrency), companyId, verdictId);
+          const claim = claimFromVerdict(v, { breach: breach ?? null, evidence: evidenceText });
+          breach = claim.breach; evidenceText = claim.evidence;
+        }
+        if (!breach) throw new LedgerError('say what went wrong (breach), or give the failed verdict', 'invalid');
         const { wallet } = await ensureWallet(db, companyId, deps.baseCurrency);
         const url = str(p['invoiceUrl']);
         const ownRef = str(p['invoice']);
@@ -854,7 +884,7 @@ export async function runTool(deps: ToolDeps, name: string, rawParams: unknown, 
         }
         const amountMinor = p['amount'] !== undefined && p['amount'] !== '' ? majorToMinor(p['amount']) : null;
         const row = await createDispute(db, { companyId, invoiceId, invoiceNumber, invoiceUrl: url ?? invoiceForCase.url ?? null, role, amountMinor: amountMinor ?? BigInt(invoiceForCase.outstandingMinor), currency: invoiceForCase.currency, claim: breach, filedBy: by, status: 'filing' });
-        const bundle = buildBundle({ role, invoice: invoiceForCase, breach, remedy: str(p['remedy']) ?? null, evidence: str(p['evidence']) ?? null, amountMinor, claimantAddress, respondentAddress, externalRef: `ai3:${companyId}:${row.id}` });
+        const bundle = buildBundle({ role, invoice: invoiceForCase, breach, remedy: str(p['remedy']) ?? null, evidence: evidenceText, amountMinor, claimantAddress, respondentAddress, externalRef: `ai3:${companyId}:${row.id}` });
         let rec: CaseRecord;
         try {
           rec = await fileDispute(deps.fetch, wallet.privateKey as `0x${string}`, bundle);

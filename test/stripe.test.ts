@@ -29,6 +29,11 @@ const fetch = async (url: string, init?: RequestInit) => {
   } else if (url.endsWith('/api/ledger/stripe/pay')) {
     reply = payReply.body;
     status = payReply.status;
+  } else if (url.endsWith('/api/ledger/agent-pay/check')) {
+    // The owner has authorised this payee and the window has closed.
+    reply = { allowed: true, code: 'ok', authorityId: 'auth_' + 'a'.repeat(24) };
+  } else if (url.endsWith('/api/ledger/agent-pay/paid')) {
+    reply = { ok: true, paymentId: 'pay_1', authorityId: 'auth_' + 'a'.repeat(24) };
   } else if (url.endsWith('.json')) {
     reply = { number: 'INV-0042', currency: 'USD', totalMinor: '15000', outstandingMinor: '15000', status: 'issued', lines: [], paymentMethods: [{ kind: 'stripe', label: 'Pay by card', details: { account: 'acct_SELLER' } }], company: { name: 'Seller Co', email: null }, stripe: { payable: true, test: true } };
   } else if (url.endsWith('/api/ledger/invoices')) {
@@ -128,6 +133,12 @@ describe('paying by card', () => {
     expect(r.data).toMatchObject({ rail: 'stripe', paymentIntentId: 'pi_777', invoice: 'INV-0042', accountCode: '5100' });
     const paid = calls.find((c) => c.url.endsWith('/api/ledger/stripe/pay'));
     expect(paid?.body).toMatchObject({ companyId: CO, invoiceUrl: 'https://ai3.test/i/abcdefghijklmnopqrstuv' });
+    // The gate was asked before the card was charged, and told afterwards.
+    const idx = (suffix: string) => calls.findIndex((c) => c.url.endsWith(suffix));
+    expect(idx('/api/ledger/agent-pay/check')).toBeGreaterThan(-1);
+    expect(idx('/api/ledger/agent-pay/check')).toBeLessThan(idx('/api/ledger/stripe/pay'));
+    expect(calls[idx('/api/ledger/agent-pay/paid')]?.body).toMatchObject({ companyId: CO, amountMinor: '15000', invoiceId: 'INV-0042', rail: 'stripe', txHash: 'pi_777', authorityId: 'auth_' + 'a'.repeat(24) });
+    expect(r.content).toContain('spending authority');
     const card = (await listBankAccounts(db, CO)).find((b) => b.name === STRIPE_CARD_BANK_NAME);
     expect(card).toMatchObject({ kind: 'card' });
     const balances = await accountBalances(db, CO);
