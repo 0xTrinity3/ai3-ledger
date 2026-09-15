@@ -192,8 +192,8 @@ aside nav a .truncate, aside nav button .truncate { letter-spacing: inherit; }
 /* The organisation in the rail: its name in slab, its mark in teal. */
 aside button[aria-label$="organization switcher"] span.font-bold,
 aside button[aria-label$="organization switcher"] span.font-semibold { font-family: var(--ai3-slab); font-weight: 400; font-size: 1rem; letter-spacing: 0; }
-aside button[aria-label$="organization switcher"] > :first-child,
-aside button[aria-label$="organization switcher"] > span:first-child > :first-child {
+aside button[aria-label$="organization switcher"] :is(span, div)[style*="background"],
+aside button[aria-label$="organization switcher"] :is(span, div):is([class*="size-"], [class*="h-5"], [class*="h-6"], [class*="h-7"], [class*="h-8"]):not(svg) {
   background: var(--ai3-teal) !important;
   color: #ffffff !important;
   border-radius: 3px !important;
@@ -228,13 +228,14 @@ span.rounded-full.border, span.rounded-full.px-2, span.rounded-full.px-1\.5 { bo
 
 /* The warning bar over the dashboard: a rule with a coloured edge, not a
    yellow box. */
-main div.border-amber-200, main div.border-amber-300, main div.bg-amber-50, main div.border-yellow-200 {
+main div[class*="amber"], main div[class*="yellow"], main div[class*="orange"] {
   background: transparent !important;
   border: 0 !important;
   border-left: 3px solid #d29a1a !important;
   border-radius: 0 !important;
   padding-left: 1rem !important;
 }
+main div[class*="amber"] *, main div[class*="yellow"] * { background: transparent; }
 main div.bg-red-50, main div.border-red-200 { background: transparent !important; border: 0 !important; border-left: 3px solid #b4432c !important; border-radius: 0 !important; }
 
 /* Page header: hairline under it, no tint. */
@@ -278,6 +279,26 @@ aside nav div:has(> div > .ai3-fin), aside nav div:has(> .ai3-fin) { border: 0 !
 .ai3-fin a.ai3-side .ext { margin-left: auto; font-size: 0.7em; opacity: 0.6; }
 .ai3-fin .ai3-fin-ai3 { margin-top: 6px; }
 .dark .ai3-fin a.ai3-side { color: #b8c2c5; }
+
+/* ---------------------------------------------------------------------------
+   The books themselves (the ledger's own pages, under .ai3) take the same
+   voice: teal where they said blue, square where they were rounded, capitals
+   condensed. Their own sheet keeps the layout. */
+.ai3 { --ai3-blue: var(--ai3-teal-deep); --ai3-blue-soft: var(--ai3-teal-soft); --ai3-green: #0a9a91; --ai3-green-soft: var(--ai3-teal-soft); --ai3-red: #b4432c; font-family: var(--ai3-slab); }
+.ai3 .ai3-card, .ai3 .ai3-report, .ai3 .ai3-detail, .ai3 .ai3-line, .ai3 .ai3-prop, .ai3 .ai3-btn, .ai3 .ai3-input, .ai3 .ai3-select, .ai3 .ai3-badge { border-radius: 3px; }
+.ai3 .ai3-head h1 { font-family: var(--ai3-slab); font-weight: 400; font-size: 1.7rem; letter-spacing: 0; }
+.ai3 .ai3-card h3 { font-family: var(--ai3-slab); font-weight: 500; }
+.ai3 .ai3-crumb, .ai3 .ai3-crumb a { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ai3-faint); }
+.ai3 .ai3-btn { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.74rem; letter-spacing: 0.12em; text-transform: uppercase; border-color: var(--ai3-ink); color: var(--ai3-ink); background: transparent; }
+.ai3 .ai3-btn:hover { border-color: var(--ai3-teal-deep); color: var(--ai3-teal-deep); background: var(--ai3-teal-soft); }
+.ai3 .ai3-btn.primary { background: var(--ai3-teal); border-color: var(--ai3-teal); color: #fff; }
+.ai3 .ai3-btn.primary:hover { background: var(--ai3-teal-deep); border-color: var(--ai3-teal-deep); color: #fff; filter: none; }
+.ai3 .ai3-btn.danger { color: #b4432c; border-color: #b4432c; }
+.ai3 .ai3-tab { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.74rem; letter-spacing: 0.12em; text-transform: uppercase; }
+.ai3 .ai3-tab.on { color: var(--ai3-teal-deep); border-bottom-color: var(--ai3-teal); }
+.ai3 .ai3-badge { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.ai3 .ai3-table th { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ai3-faint); }
+.dark .ai3 .ai3-btn { border-color: #b8c2c5; color: #eef1f1; }
 
 /* Plugin management is the operator's: the settings entry goes, the API stays. */
 a[href$="/company/settings/instance/plugins"] { display: none !important; }
