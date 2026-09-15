@@ -192,12 +192,12 @@ aside nav a .truncate, aside nav button .truncate { letter-spacing: inherit; }
 /* The organisation in the rail: its name in slab, its mark in teal. */
 aside button[aria-label$="organization switcher"] span.font-bold,
 aside button[aria-label$="organization switcher"] span.font-semibold { font-family: var(--ai3-slab); font-weight: 400; font-size: 1rem; letter-spacing: 0; }
-aside button[aria-label$="organization switcher"] :is(span, div)[style*="background"],
-aside button[aria-label$="organization switcher"] :is(span, div):is([class*="size-"], [class*="h-5"], [class*="h-6"], [class*="h-7"], [class*="h-8"]):not(svg) {
-  background: var(--ai3-teal) !important;
-  color: #ffffff !important;
-  border-radius: 3px !important;
-}
+/* The host draws each company a pixel-art mark from its name. Here the mark
+   is the initial on teal, the way ai3.co draws it; a real logo still shows. */
+aside button[aria-label$="switcher"] div.size-5, [role="menu"] div.size-5.rounded-md { background: var(--ai3-teal) !important; border-radius: 3px !important; }
+aside button[aria-label$="switcher"] div.size-5 > img[aria-hidden="true"], [role="menu"] div.size-5.rounded-md > img[aria-hidden="true"] { display: none; }
+aside button[aria-label$="switcher"] div.size-5 > div.bg-muted, [role="menu"] div.size-5.rounded-md > div.bg-muted { display: none; }
+aside button[aria-label$="switcher"] div.size-5 > span, [role="menu"] div.size-5.rounded-md > span { filter: none; font-family: var(--ai3-cond); font-weight: 700; }
 
 /* ---------------------------------------------------------------------------
    Buttons speak the way ai3.co's do: condensed capitals, teal when primary. */
@@ -228,7 +228,7 @@ span.rounded-full.border, span.rounded-full.px-2, span.rounded-full.px-1\.5 { bo
 
 /* The warning bar over the dashboard: a rule with a coloured edge, not a
    yellow box. */
-div[class*="bg-amber"], div[class*="bg-yellow"], div[class*="border-amber"], div[class*="border-yellow"] {
+div[role="note"][class*="F59E0B"], div[role="note"][class*="f59e0b"], div[class*="bg-amber"], div[class*="bg-yellow"], div[class*="border-amber"], div[class*="border-yellow"] {
   background: transparent !important;
   border: 0 !important;
   border-left: 3px solid #d29a1a !important;
@@ -236,7 +236,8 @@ div[class*="bg-amber"], div[class*="bg-yellow"], div[class*="border-amber"], div
   padding-left: 1rem !important;
 }
 div[class*="bg-amber"] > *, div[class*="bg-yellow"] > * { background: transparent; }
-div[class*="bg-red-50"], div[class*="border-red-2"] { background: transparent !important; border: 0 !important; border-left: 3px solid #b4432c !important; border-radius: 0 !important; }
+div[role="note"][class*="2563EB"] { background: transparent !important; border: 0 !important; border-left: 3px solid var(--ai3-teal-deep) !important; border-radius: 0 !important; color: var(--ai3-ink) !important; padding-left: 1rem !important; }
+div[role="note"][class*="bg-red-100"], div[class*="bg-red-50"], div[class*="border-red-2"] { background: transparent !important; border: 0 !important; border-left: 3px solid #b4432c !important; border-radius: 0 !important; }
 
 /* Page header: hairline under it, no tint. */
 header.border-b, div.sticky.top-0.border-b { background: var(--background); border-color: var(--ai3-hair); }
