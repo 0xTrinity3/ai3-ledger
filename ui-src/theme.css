@@ -123,6 +123,9 @@ aside nav div:has(> div > .ai3-fin), aside nav div:has(> .ai3-fin) { border: 0 !
 .ai3-fin a.ai3-side .ext { margin-left: auto; font-size: 0.7em; opacity: 0.6; }
 .ai3-fin .ai3-fin-ai3 { margin-top: 6px; }
 
+/* Plugin management is the operator's: the settings entry goes, the API stays. */
+a[href$="/company/settings/instance/plugins"] { display: none !important; }
+
 /* The plugin page frame: no "Plugins ›" crumb over the books. */
 [data-ai3-hide] { display: none !important; }
 
