@@ -1508,6 +1508,25 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
   const [groupBy, setGroupBy] = useState('');
   const range = pnlRange(choice, list, from, to);
   const pnl = usePluginData<Pnl>('pnl', { companyId, from: range.from, to: range.to, ...(groupBy ? { groupBy } : {}) });
+  // Agent names for the by-agent split. The page runs in the host's own
+  // document as the board, so the host's agents list is one same-origin
+  // request away; the worker has no agents.read capability and does not
+  // need one for this.
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (groupBy !== 'agent' || !companyId) return;
+    let live = true;
+    fetch(`/api/companies/${encodeURIComponent(companyId)}/agents`, { credentials: 'same-origin', headers: { accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: unknown) => {
+        const rows = Array.isArray(list) ? list : ((list as { agents?: unknown[]; data?: unknown[] })?.agents ?? (list as { data?: unknown[] })?.data ?? []);
+        const names: Record<string, string> = {};
+        for (const a of rows as Array<{ id?: string; name?: string }>) if (a?.id && a?.name) names[a.id] = a.name;
+        if (live) setAgentNames(names);
+      })
+      .catch(() => { /* the id stays */ });
+    return () => { live = false; };
+  }, [groupBy, companyId]);
   const [asOf, setAsOf] = useState(today());
   const asOfIso = `${asOf}T23:59:59.999Z`;
   const nav = useHostNavigation();
@@ -1544,7 +1563,7 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
           <tbody>
             {p.groups.map((g) => (
               <tr className="line" key={g.key ?? 'none'} style={{ fontWeight: 400 }}>
-                <td style={{ paddingLeft: 0 }}>{g.key ? (g.label ?? g.key) : 'Unattributed'}</td>
+                <td style={{ paddingLeft: 0 }}>{g.key ? (agentNames[g.key] ?? g.label ?? g.key) : 'Unattributed'}</td>
                 <td className="num"><a {...nav.linkProps(entriesLink({ type: 'income', from: range.from, to: range.to, groupBy, groupKey: g.key, label: `Income · ${groupBy} ${g.key ?? 'unattributed'}` }))}>{fmt(g.incomeMinor, { symbol: false })}</a></td>
                 <td className="num"><a {...nav.linkProps(entriesLink({ type: 'expense', from: range.from, to: range.to, groupBy, groupKey: g.key, label: `Expenses · ${groupBy} ${g.key ?? 'unattributed'}` }))}>{fmt(g.expenseMinor, { symbol: false })}</a></td>
                 <td className="num">{fmt(g.netMinor, { symbol: false, paren: true })}</td>
