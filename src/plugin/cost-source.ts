@@ -76,7 +76,10 @@ export function listPriceCents(row: Pick<CostEventRow, 'model' | 'input_tokens' 
   if (input + cached + output === 0) return 0;
   const model = String(row.model ?? '');
   const rate = LIST_RATES.find(([re]) => re.test(model))?.[1] ?? FALLBACK_RATE;
-  const usd = (Math.max(0, input - cached) * rate.in + cached * rate.in * 0.1 + output * rate.out) / 1_000_000;
+  // Paperclip counts cached input beside uncached input, not within it (a run
+  // on the box reported 42k input and 173k cached), so the two are priced as
+  // the separate buckets they are.
+  const usd = (input * rate.in + cached * rate.in * 0.1 + output * rate.out) / 1_000_000;
   return Math.round(usd * 100);
 }
 

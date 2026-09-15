@@ -12,7 +12,8 @@ describe('a subscription run is booked at list price, as an estimate', () => {
     // 1M input on Haiku = $1, 1M output = $5.
     expect(listPriceCents({ model: 'claude-haiku-4-5-20251001', input_tokens: 1_000_000, cached_input_tokens: 0, output_tokens: 0 })).toBe(100);
     expect(listPriceCents({ model: 'claude-haiku-4-5-20251001', input_tokens: 0, cached_input_tokens: 0, output_tokens: 1_000_000 })).toBe(500);
-    expect(listPriceCents({ model: 'claude-haiku-4-5-20251001', input_tokens: 1_000_000, cached_input_tokens: 1_000_000, output_tokens: 0 })).toBe(10);
+    // Cached input is its own bucket beside uncached input: $1 + $0.10.
+    expect(listPriceCents({ model: 'claude-haiku-4-5-20251001', input_tokens: 1_000_000, cached_input_tokens: 1_000_000, output_tokens: 0 })).toBe(110);
     expect(listPriceCents({ model: 'gpt-5-mini', input_tokens: 1_000_000, cached_input_tokens: 0, output_tokens: 0 })).toBe(25);
     expect(listPriceCents({ model: 'something-new', input_tokens: 1_000_000, cached_input_tokens: 0, output_tokens: 0 })).toBe(300);
     expect(listPriceCents({ model: 'claude-haiku-4-5', input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 })).toBe(0);
