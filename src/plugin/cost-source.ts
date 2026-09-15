@@ -25,6 +25,9 @@ interface CostEventRow {
   cost_status: string | null;
   model: string | null;
   cost_cents: number | string | null;
+  input_tokens: number | string | null;
+  cached_input_tokens: number | string | null;
+  output_tokens: number | string | null;
   occurred_at: string | Date;
   /** created_at printed by PostgreSQL with full microsecond precision; the cursor value. */
   created_at_txt: string;
@@ -40,13 +43,56 @@ export function categorise(row: Pick<CostEventRow, 'model' | 'provider' | 'billi
   return 'other';
 }
 
+/**
+ * What a subscription run would have cost at list price.
+ *
+ * An agent on a Claude or ChatGPT subscription reports its tokens and a cost
+ * of zero: nothing is billed per call. Booking zero makes the work free in the
+ * books and absent from every per-agent and per-project figure, while the
+ * subscription leaves the account regardless. So the run is priced from its
+ * tokens at the model's published rate and posted as an estimate — a figure
+ * that says what the work is worth, labelled as what it is. Unknown models
+ * take a conservative middle rate rather than nothing.
+ *
+ * Rates are USD per million tokens, input / output; cached input at a tenth.
+ */
+const LIST_RATES: Array<[RegExp, { in: number; out: number }]> = [
+  [/opus/i, { in: 5, out: 25 }],
+  [/sonnet-5|sonnet-4\.?6/i, { in: 3, out: 15 }],
+  [/sonnet/i, { in: 3, out: 15 }],
+  [/haiku/i, { in: 1, out: 5 }],
+  [/gpt-5(\.\d+)?-nano/i, { in: 0.05, out: 0.4 }],
+  [/gpt-5(\.\d+)?-mini|o4-mini|o3-mini|codex-mini/i, { in: 0.25, out: 2 }],
+  [/gpt-5|o3\b/i, { in: 1.25, out: 10 }],
+  [/gpt-4/i, { in: 2.5, out: 10 }],
+];
+const FALLBACK_RATE = { in: 3, out: 15 };
+
+export function listPriceCents(row: Pick<CostEventRow, 'model' | 'input_tokens' | 'cached_input_tokens' | 'output_tokens'>): number {
+  const n = (v: number | string | null) => (v == null ? 0 : Number(v) || 0);
+  const input = n(row.input_tokens);
+  const cached = n(row.cached_input_tokens);
+  const output = n(row.output_tokens);
+  if (input + cached + output === 0) return 0;
+  const model = String(row.model ?? '');
+  const rate = LIST_RATES.find(([re]) => re.test(model))?.[1] ?? FALLBACK_RATE;
+  const usd = (Math.max(0, input - cached) * rate.in + cached * rate.in * 0.1 + output * rate.out) / 1_000_000;
+  return Math.round(usd * 100);
+}
+
+/** A run the subscription covered: Paperclip books it at zero, and says so. */
+export function isSubscriptionRun(row: Pick<CostEventRow, 'billing_type' | 'cost_cents'>): boolean {
+  const cents = row.cost_cents == null ? 0 : Number(row.cost_cents) || 0;
+  return cents === 0 && (row.billing_type === 'subscription_included' || row.billing_type === 'subscription');
+}
+
 export function paperclipCostSource(sql: SqlClient): CostSource {
   return {
     platform: PAPERCLIP,
     async read(companyId: string, cursor: CostCursor, limit: number): Promise<CostBatch> {
       const rows = await sql.query<CostEventRow>(
         `SELECT id, company_id, agent_id, issue_id, project_id, goal_id, provider, biller, billing_type,
-                cost_status, model, cost_cents, occurred_at, created_at::text AS created_at_txt
+                cost_status, model, cost_cents, input_tokens, cached_input_tokens, output_tokens, occurred_at, created_at::text AS created_at_txt
            FROM public.cost_events
           WHERE company_id = $1::uuid
             AND ($2::timestamptz IS NULL OR (created_at, id) > ($2::timestamptz, $3::uuid))
@@ -55,7 +101,8 @@ export function paperclipCostSource(sql: SqlClient): CostSource {
         [companyId, cursor.lastOccurredAt, cursor.lastEventRef, limit],
       );
       const records: CostRecord[] = rows.map((r) => {
-        const cents = r.cost_cents == null ? 0n : toMinor(r.cost_cents);
+        const subscription = isSubscriptionRun(r);
+        const cents = subscription ? BigInt(listPriceCents(r)) : r.cost_cents == null ? 0n : toMinor(r.cost_cents);
         const category = categorise(r);
         const biller = r.biller ?? r.provider;
         return {
@@ -65,8 +112,8 @@ export function paperclipCostSource(sql: SqlClient): CostSource {
           currency: 'USD',
           category,
           ...(biller ? { biller } : {}),
-          description: describe(r, category),
-          estimated: r.cost_status !== 'reported',
+          description: subscription ? `${describe(r, category)} · covered by subscription, at list price` : describe(r, category),
+          estimated: subscription || r.cost_status !== 'reported',
           subject: {
             ...(r.agent_id ? { agent: r.agent_id } : {}),
             ...(r.project_id ? { project: r.project_id } : {}),
