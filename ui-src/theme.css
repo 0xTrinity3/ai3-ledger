@@ -330,3 +330,8 @@ div.mb-8:has(> svg[viewBox="22.5 22.5 121 27"])::before { content: 'AI3'; font-f
 /* The network inside the company: ai3.co's page fills the frame. */
 .ai3.ai3-frame { max-width: none; padding: 0; margin: 0; }
 .ai3-frame-view { display: block; width: 100%; height: calc(100vh - 3.2rem); border: 0; background: #fff; }
+
+/* The account menu's headers, and its one destructive entry. */
+.ai3-menu-head { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.7rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ai3-faint); padding: 10px 12px 2px; }
+.ai3-menu-head + .ai3-menu-head { display: none; }
+.ai3-menu-danger span.block.text-sm { color: #b4432c; }

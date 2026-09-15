@@ -85,22 +85,54 @@ function groom(root: ParentNode) {
 
 /**
  * The account menu is Paperclip's, and it is the only one: ai3.co has none of
- * its own. So it has to reach everything a person needs. Two entries are added
- * for what only ai3.co holds (its settings page, and invitations), the host's
- * docs and feedback links point at AI3's, and Sign out ends both sessions —
- * the tenant's, which the host handles, and ai3.co's, asked for alongside.
- * Same site, so the request carries ai3.co's cookie.
+ * its own. So it carries every setting a person has, each under the header
+ * it belongs to, beside the host's own entries:
+ *
+ *   Profile        View profile · Edit profile (host) · Public profile on AI3
+ *   Notifications  Email notifications · Daily digest
+ *   Network        Invitations · What the bar shows · Connectors for Claude and ChatGPT
+ *   App            Documentation · Feedback · dark mode (host)
+ *   Account        Sign out (host, ends both sessions) · Delete account
+ *
+ * The host's nodes are never moved (React owns them); headers and AI3's
+ * entries are inserted beside them. AI3's pages open inside the company,
+ * through the rail's Network frame, at the section asked for.
  */
-const AI3_ENTRIES: Array<{ key: string; label: string; description: string; path: string; cloneOf: string }> = [
-  { key: 'settings', label: 'Settings on AI3', description: 'Your network profile, what AI3 emails you, and the figure in the nav.', path: '/me/settings', cloneOf: 'Edit profile' },
-  { key: 'invites', label: 'Invitations', description: 'Invite people to AI3, and see who used yours.', path: '/invites', cloneOf: 'View profile' },
+type MenuEntry = { key: string; label: string; description: string; path: string; icon: string };
+type MenuHeader = { key: string; label: string; before: string };
+const ICONS: Record<string, string> = {
+  profile: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  invite: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
+  bar: '<path d="M3 3v18h18"/><path d="M7 16l4-6 4 3 5-7"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-12 0V8z"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+};
+/** Headers, placed before the host entry named; AI3's entries follow the host entry named in `after`, or the header. */
+const MENU_HEADERS: MenuHeader[] = [
+  { key: 'profile', label: 'Profile', before: 'View profile' },
+  { key: 'notifications', label: 'Notifications', before: 'Documentation' },
+  { key: 'network', label: 'Network', before: 'Documentation' },
+  { key: 'app', label: 'App', before: 'Documentation' },
+  { key: 'account', label: 'Account', before: 'Sign out' },
 ];
+const MENU_ENTRIES: Array<MenuEntry & { after: string }> = [
+  { key: 'public-profile', label: 'Public profile on AI3', description: 'Your headline and about, and whether you are listed.', path: '/me/settings#profile', icon: 'profile', after: 'Edit profile' },
+  { key: 'notify', label: 'Email notifications', description: 'What AI3 emails you about your organisations.', path: '/me/settings#notifications', icon: 'bell', after: 'header:notifications' },
+  { key: 'digest', label: 'Daily digest', description: 'When the one message a day lands, and in which time zone.', path: '/me/settings#digest', icon: 'clock', after: 'notify' },
+  { key: 'invites', label: 'Invitations', description: 'Invite people to AI3, and see who used yours.', path: '/invites', icon: 'invite', after: 'header:network' },
+  { key: 'navfig', label: 'What the bar shows', description: 'Portfolio, revenue, runway, credits, or nothing.', path: '/me/settings#nav', icon: 'bar', after: 'invites' },
+  { key: 'connectors', label: 'Connectors', description: 'Work from Claude or ChatGPT: tokens, and who has access.', path: '/me/settings#connectors', icon: 'plug', after: 'navfig' },
+  { key: 'delete', label: 'Delete account', description: 'Your profile and memberships go; your organisations do not.', path: '/me/settings#leaving', icon: 'trash', after: 'Sign out' },
+];
+const REPOINT: Record<string, string> = { Documentation: `${AI3_ORIGIN}/docs`, Feedback: `${AI3_ORIGIN}/contact` };
+
 /** ai3.co's pages open inside the company, through the rail's Network frame. */
 function insideHref(path: string): string {
   const prefix = location.pathname.split('/')[1] || '';
   return `/${prefix}/ledger?tab=network&p=${encodeURIComponent(path)}`;
 }
-const REPOINT: Record<string, string> = { Documentation: `${AI3_ORIGIN}/docs`, Feedback: `${AI3_ORIGIN}/contact` };
 
 function groomAccountMenu(root: ParentNode) {
   const items = Array.from(root.querySelectorAll('a.rounded-xl.items-start, button.rounded-xl.items-start')) as HTMLElement[];
@@ -108,25 +140,42 @@ function groomAccountMenu(root: ParentNode) {
   const labelOf = (el: Element) => (el.querySelector('span.block.text-sm')?.textContent || '').trim();
   const byLabel = new Map(items.map((el) => [labelOf(el), el]));
   const docs = byLabel.get('Documentation');
-  if (!docs || !docs.parentElement) return;
+  const menu = docs?.parentElement;
+  if (!docs || !menu) return;
   for (const [label, href] of Object.entries(REPOINT)) {
     const el = byLabel.get(label);
     if (el instanceof HTMLAnchorElement && el.href !== href) el.href = href;
   }
-  for (const e of AI3_ENTRIES) {
-    if (docs.parentElement.querySelector(`[data-ai3-menu="${e.key}"]`)) continue;
-    const src = byLabel.get(e.cloneOf) || docs;
+  const mine = (key: string) => menu.querySelector(`[data-ai3-menu="${key}"]`) as HTMLElement | null;
+  for (const h of MENU_HEADERS) {
+    if (mine(`header:${h.key}`)) continue;
+    const anchor = byLabel.get(h.before);
+    if (!anchor) continue;
+    const el = document.createElement('div');
+    el.className = 'ai3-menu-head';
+    el.textContent = h.label;
+    el.setAttribute('data-ai3-menu', `header:${h.key}`);
+    el.setAttribute('data-ai3-keep', '1');
+    menu.insertBefore(el, anchor);
+  }
+  for (const e of MENU_ENTRIES) {
+    if (mine(e.key)) continue;
+    const after = e.after.startsWith('header:') ? mine(e.after) : (mine(e.after) || byLabel.get(e.after) || null);
+    if (!after) continue;
     const node = document.createElement('a');
-    node.className = src.className;
-    node.innerHTML = src.innerHTML;
+    node.className = docs.className;
+    node.innerHTML = docs.innerHTML;
     node.href = insideHref(e.path);
     node.setAttribute('data-ai3-menu', e.key);
     node.setAttribute('data-ai3-keep', '1');
+    const icon = node.querySelector('svg');
+    if (icon) { icon.innerHTML = ICONS[e.icon] || ''; icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('fill', 'none'); icon.setAttribute('stroke', 'currentColor'); icon.setAttribute('stroke-width', '2'); icon.setAttribute('stroke-linecap', 'round'); icon.setAttribute('stroke-linejoin', 'round'); }
     const l = node.querySelector('span.block.text-sm');
     const d = node.querySelector('span.block.text-xs');
     if (l) l.textContent = e.label;
     if (d) d.textContent = e.description;
-    docs.parentElement.insertBefore(node, docs);
+    if (e.key === 'delete') node.classList.add('ai3-menu-danger');
+    after.insertAdjacentElement('afterend', node);
   }
   const out = byLabel.get('Sign out');
   if (out && !out.hasAttribute('data-ai3-out')) {
