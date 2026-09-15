@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.23.0',
+  version: '0.24.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -43,7 +43,9 @@ const manifest: PaperclipPluginManifestV1 = {
   ui: {
     slots: [
       { type: 'page', id: 'ledger-page', displayName: 'Ledger', exportName: 'LedgerPage', routePath: 'ledger', order: 10 },
-      { type: 'sidebar', id: 'finance-nav', displayName: 'Finance', exportName: 'LedgerSidebarItem', order: 10 },
+          // A sidebarPanel renders after the host's own groups, so Finance follows
+    // the work and the organisation rather than sitting in the middle of Work.
+    { type: 'sidebarPanel', id: 'finance-nav', displayName: 'Finance', exportName: 'LedgerSidebarItem', order: 10 },
       // Finance settings live with the company's other settings (Members, Secrets…) at /<prefix>/company/settings/finance.
       { type: 'companySettingsPage', id: 'finance-settings', displayName: 'Finance', exportName: 'LedgerCompanySettings', routePath: 'finance', order: 40 },
       // The organisation's default model, one choice for every agent; applied through ai3.co. /<prefix>/company/settings/model.

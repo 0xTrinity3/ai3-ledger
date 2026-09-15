@@ -17,6 +17,7 @@ import { useHostContext, useHostLocation, useHostNavigation, usePluginAction, us
 import type { PluginPageProps, PluginSidebarProps } from '@paperclipai/plugin-sdk/ui';
 import { BillsTab, EntriesView, ImportTab, JournalsTab, TransactionDetail, TrialBalanceCard, entriesLink } from './books.js';
 import { connectWallet, discoverWallets, sendToken, signMessage, short, waitForReceipt, WalletError, type ChainInfo, type DiscoveredWallet } from './wallet.js';
+import { installTheme, AI3_ORIGIN } from './theme.js';
 
 // Settings › Model lives in its own file; the host loads it by export name.
 export { ModelSettings } from './model.js';
@@ -141,6 +142,10 @@ const CSS = `
 
 export function useStyles() {
   useEffect(() => {
+    // AI3's theme for the whole host document goes in first: every slot the
+    // host mounts calls this, so the shell is AI3's on any page with Finance
+    // in the rail.
+    installTheme();
     if (document.getElementById('ai3-ledger-css')) return;
     const el = document.createElement('style');
     el.id = 'ai3-ledger-css';
@@ -2531,38 +2536,83 @@ export function LedgerCompanySettings(_props: PluginPageProps) {
   );
 }
 
-const FINANCE_ITEMS: Array<{ label: string; to: string; match: (path: string, search: string) => boolean }> = [
-  { label: 'Position', to: '/ledger', match: (p, s) => p.endsWith('/ledger') && !new URLSearchParams(s).get('tab') },
-  { label: 'Bank accounts', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'banks' },
+// Icons in the host's own idiom (lucide-style strokes), so Finance reads as
+// one more group of the rail rather than a plugin bolted onto it.
+const ICON: Record<string, string> = {
+  position: '<path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>',
+  invoices: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  bills: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/>',
+  banks: '<path d="M3 22h18"/><path d="M6 18v-7"/><path d="M10 18v-7"/><path d="M14 18v-7"/><path d="M18 18v-7"/><path d="M12 2 2 8h20z"/>',
+  reconcile: '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
+  transactions: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
+  journals: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  pnl: '<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>',
+  balance: '<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
+  imports: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  portfolio: '<path d="M3 3v18h18"/><path d="M7 16l4-6 4 3 5-7"/>',
+  credits: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+  network: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+};
+const Icon = ({ name }: { name: string }) => <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: ICON[name] || '' }} />;
+
+const tabIs = (s: string, tab: string | null) => new URLSearchParams(s).get('tab') === tab;
+const FINANCE_ITEMS: Array<{ label: string; icon: string; to: string; match: (path: string, search: string) => boolean }> = [
+  { label: 'Position', icon: 'position', to: '/ledger', match: (p, s) => p.endsWith('/ledger') && tabIs(s, null) },
+  { label: 'Invoices', icon: 'invoices', to: '/ledger?tab=invoices', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'invoices') },
+  { label: 'Bills', icon: 'bills', to: '/ledger?tab=bills', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'bills') },
+  { label: 'Bank accounts', icon: 'banks', to: '/ledger?tab=banks', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'banks') },
   // Reconciliation had no entry here at all. The screen existed, and the only
   // way to it was a button on Bank accounts that appears only when a line is
   // already waiting — so the one person who most needed it, somebody wondering
   // whether their bank matches their books, could not find it.
-  { label: 'Reconciliation', to: '/ledger?tab=reconcile', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'reconcile' },
-  { label: 'Transactions', to: '/ledger?tab=transactions', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'transactions' },
-  { label: 'Invoices', to: '/ledger?tab=invoices', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'invoices' },
-  { label: 'Bills', to: '/ledger?tab=bills', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'bills' },
-  { label: 'Journals', to: '/ledger?tab=journals', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'journals' },
-  { label: 'Profit and loss', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'statements' && !s.includes('view=balance') && !s.includes('view=trial') },
-  { label: 'Balance sheet', to: '/ledger?tab=statements&view=balance', match: (p, s) => p.endsWith('/ledger') && s.includes('view=balance') },
-  { label: 'Trial balance', to: '/ledger?tab=statements&view=trial', match: (p, s) => p.endsWith('/ledger') && s.includes('view=trial') },
-  { label: 'Import', to: '/ledger?tab=import', match: (p, s) => p.endsWith('/ledger') && new URLSearchParams(s).get('tab') === 'import' },
-  { label: 'Costs', to: '/costs', match: (p) => p.endsWith('/costs') },
-  { label: 'Settings', to: '/company/settings/finance', match: (p) => p.endsWith('/company/settings/finance') },
+  { label: 'Reconciliation', icon: 'reconcile', to: '/ledger?tab=reconcile', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'reconcile') },
+  { label: 'Transactions', icon: 'transactions', to: '/ledger?tab=transactions', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'transactions') },
+  { label: 'Journals', icon: 'journals', to: '/ledger?tab=journals', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'journals') },
+  { label: 'Profit and loss', icon: 'pnl', to: '/ledger?tab=statements', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'statements') && !s.includes('view=balance') && !s.includes('view=trial') },
+  { label: 'Balance sheet', icon: 'balance', to: '/ledger?tab=statements&view=balance', match: (p, s) => p.endsWith('/ledger') && s.includes('view=balance') },
+  { label: 'Import', icon: 'imports', to: '/ledger?tab=import', match: (p, s) => p.endsWith('/ledger') && tabIs(s, 'import') },
+  { label: 'Finance settings', icon: 'settings', to: '/company/settings/finance', match: (p) => p.endsWith('/company/settings/finance') },
 ];
 
+// What lives on ai3.co and nowhere else: the portfolio across organisations,
+// the credits that pay for the thinking, and the network. Reached from here so
+// the two surfaces are one product, and opened in this tab because they are.
+const AI3_ITEMS: Array<{ label: string; icon: string; href: string }> = [
+  { label: 'Portfolio', icon: 'portfolio', href: `${AI3_ORIGIN}/portfolio` },
+  { label: 'Credits', icon: 'credits', href: `${AI3_ORIGIN}/companies` },
+  { label: 'Network', icon: 'network', href: `${AI3_ORIGIN}/feed` },
+];
+
+const COLLAPSE_KEY = 'ai3.finance.collapsed';
+
+/** Finance as a group of the rail, after the host's own, with AI3's own doors beneath it. */
 export function LedgerSidebarItem(_props: PluginSidebarProps) {
   useStyles();
   const nav = useHostNavigation();
   const location = useHostLocation();
+  const [collapsed, setCollapsed] = useState<boolean>(() => { try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; } });
+  const toggle = () => setCollapsed((c) => { try { localStorage.setItem(COLLAPSE_KEY, c ? '0' : '1'); } catch { /* private mode */ } return !c; });
+  const chevron = <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>;
   return (
-    <div>
-      <div className="ai3-side-label">Finance</div>
-      {FINANCE_ITEMS.map((item) => (
-        <a key={item.label} {...nav.linkProps(item.to)} className={`ai3-side ${item.match(location.pathname, location.search) ? 'on' : ''}`}>
-          {item.label}
-        </a>
-      ))}
+    <div className="ai3-fin" data-collapsed={collapsed ? '1' : '0'}>
+      <div className="ai3-fin-label">
+        <button type="button" aria-label={collapsed ? 'Expand Finance' : 'Collapse Finance'} aria-expanded={!collapsed} onClick={toggle}>{chevron}</button>
+        <span>Finance</span>
+      </div>
+      <div className="ai3-fin-links">
+        {FINANCE_ITEMS.map((item) => (
+          <a key={item.label} {...nav.linkProps(item.to)} className={`ai3-side ${item.match(location.pathname, location.search) ? 'on' : ''}`}>
+            <Icon name={item.icon} />{item.label}
+          </a>
+        ))}
+      </div>
+      <div className="ai3-fin-label ai3-fin-ai3"><span>AI3</span></div>
+      <div className="ai3-fin-links">
+        {AI3_ITEMS.map((item) => (
+          <a key={item.label} href={item.href} className="ai3-side"><Icon name={item.icon} />{item.label}<span className="ext" aria-hidden="true">↗</span></a>
+        ))}
+      </div>
     </div>
   );
 }

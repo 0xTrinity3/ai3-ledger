@@ -1,0 +1,132 @@
+/* AI3 inside Paperclip.
+   ---------------------------------------------------------------------------
+   Paperclip is the working surface for every hosted organisation, and AI3 owns
+   the product. This sheet makes the two one thing: AI3's palette on the host's
+   own tokens, AI3's typography on the chrome, the duplicates that ai3.co
+   already owns taken out of the way, and Finance placed after the work rather
+   than in the middle of it.
+
+   It is injected into the host document by the ledger plugin on every page in
+   the signed-in shell, and linked from the shell's index.html by the box's
+   brand step so the sign-in page and the first paint carry it too. It only
+   overrides tokens and hides things: no upstream file is patched. */
+
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400&family=Roboto+Condensed:wght@700&display=swap');
+
+:root, .light, .light-theme {
+  --ai3-teal: #0dc5b9;
+  --ai3-teal-deep: #0a9a91;
+  --ai3-teal-soft: #e6f7f5;
+  --ai3-ink: #1c2224;
+  --ai3-paper: #f4f6f6;
+  --ai3-slab: 'Roboto Slab', Georgia, 'Times New Roman', serif;
+  --ai3-cond: 'Roboto Condensed', 'Helvetica Neue', Arial, sans-serif;
+
+  --background: #ffffff;
+  --foreground: var(--ai3-ink);
+  --card: #ffffff;
+  --card-foreground: var(--ai3-ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--ai3-ink);
+  --primary: var(--ai3-teal-deep);
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f2;
+  --secondary-foreground: var(--ai3-ink);
+  --muted: #f0f3f3;
+  --muted-foreground: #5d686c;
+  --accent: var(--ai3-teal-soft);
+  --accent-foreground: #0b3b37;
+  --border: #e3e7e8;
+  --input: #e3e7e8;
+  --ring: var(--ai3-teal);
+  --sidebar: var(--ai3-paper);
+  --sidebar-foreground: var(--ai3-ink);
+  --sidebar-primary: var(--ai3-teal-deep);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--ai3-teal-soft);
+  --sidebar-accent-foreground: #0b3b37;
+  --sidebar-border: #e3e7e8;
+  --sidebar-ring: var(--ai3-teal);
+  --chart-1: var(--ai3-teal-deep);
+  --chart-2: #2d7ff9;
+  --chart-3: #8a6d1f;
+  --chart-4: #b4432c;
+  --chart-5: #5d686c;
+}
+
+.dark, .dark-theme {
+  --ai3-teal-soft: rgba(13, 197, 185, 0.14);
+  --background: #121516;
+  --foreground: #eef1f1;
+  --card: #181c1d;
+  --card-foreground: #eef1f1;
+  --popover: #181c1d;
+  --popover-foreground: #eef1f1;
+  --primary: #0dc5b9;
+  --primary-foreground: #08201e;
+  --secondary: #21272a;
+  --secondary-foreground: #eef1f1;
+  --muted: #21272a;
+  --muted-foreground: #9aa4a8;
+  --accent: rgba(13, 197, 185, 0.14);
+  --accent-foreground: #d6f7f4;
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.13);
+  --ring: #0dc5b9;
+  --sidebar: #15191a;
+  --sidebar-foreground: #eef1f1;
+  --sidebar-primary: #0dc5b9;
+  --sidebar-primary-foreground: #08201e;
+  --sidebar-accent: rgba(13, 197, 185, 0.14);
+  --sidebar-accent-foreground: #d6f7f4;
+  --sidebar-border: rgba(255, 255, 255, 0.09);
+  --sidebar-ring: #0dc5b9;
+  --chart-1: #0dc5b9;
+}
+
+/* The rail is paper, the work is white: the same split as ai3.co's app. */
+aside.bg-background { background: var(--sidebar); }
+.dark aside.bg-background { background: var(--sidebar); }
+aside + div.border-t.bg-background, aside ~ div.border-t.bg-background { background: var(--sidebar); }
+
+/* The chrome speaks AI3: condensed capitals for labels, slab for the org. */
+h1.text-sm.font-semibold.uppercase.tracking-wider,
+aside nav span.font-mono.uppercase,
+h3.text-sm.font-semibold.uppercase.tracking-wide,
+.ai3-fin-label span {
+  font-family: var(--ai3-cond);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+aside button[aria-label$="organization switcher"] span.font-bold { font-family: var(--ai3-slab); font-weight: 400; font-size: 0.95rem; }
+
+/* Primary actions are AI3 teal, and their focus ring too. */
+.bg-primary { background-color: var(--primary) !important; color: var(--primary-foreground) !important; }
+.bg-primary:hover { filter: brightness(0.95); }
+
+/* Finance renders as a group of the sidebar, not as a boxed plugin panel:
+   the host wraps a sidebarPanel slot in a border, and this takes it away. */
+aside nav div:has(> div > .ai3-fin), aside nav div:has(> .ai3-fin) { border: 0 !important; padding: 0 !important; border-radius: 0 !important; }
+.ai3-fin { display: flex; flex-direction: column; gap: 2px; }
+.ai3-fin-label { padding: 6px 12px; display: flex; align-items: center; gap: 4px; min-height: 24px; }
+.ai3-fin-label span { font-size: var(--text-nano, 0.66rem); text-transform: uppercase; color: color-mix(in oklab, var(--muted-foreground) 70%, transparent); }
+.ai3-fin-label button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: 0; background: none; color: var(--muted-foreground); cursor: pointer; border-radius: 6px; margin-left: -4px; }
+.ai3-fin-label button:hover { background: color-mix(in oklab, var(--accent) 60%, transparent); }
+.ai3-fin-label button svg { width: 14px; height: 14px; transition: transform 120ms; }
+.ai3-fin[data-collapsed="1"] .ai3-fin-label button svg { transform: rotate(-90deg); }
+.ai3-fin[data-collapsed="1"] .ai3-fin-links { display: none; }
+.ai3-fin-links { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.ai3-fin a.ai3-side { display: flex; align-items: center; gap: 10px; margin: 0 8px; padding: 6px 8px; border-radius: 8px; color: color-mix(in oklab, var(--foreground) 80%, transparent); font-size: var(--text-compact, 0.8125rem); font-weight: 500; text-decoration: none; transition: background-color 120ms, color 120ms; }
+.ai3-fin a.ai3-side:hover { background: color-mix(in oklab, var(--accent) 50%, transparent); color: var(--foreground); text-decoration: none; }
+.ai3-fin a.ai3-side.on { background: var(--accent); color: var(--foreground); }
+.ai3-fin a.ai3-side svg { width: 16px; height: 16px; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ai3-fin a.ai3-side .ext { margin-left: auto; font-size: 0.7em; opacity: 0.6; }
+.ai3-fin .ai3-fin-ai3 { margin-top: 6px; }
+
+/* The plugin page frame: no "Plugins ›" crumb over the books. */
+[data-ai3-hide] { display: none !important; }
+
+/* Sign-in is ai3.co's. The page still exists for a direct visit; it wears the
+   mark, says whose it is, and offers no way to create a second account. */
+svg[viewBox="22.5 22.5 121 27"] { display: none !important; }
+div.mb-8:has(> svg[viewBox="22.5 22.5 121 27"])::before { content: 'AI3'; font-family: var(--ai3-cond); font-weight: 700; font-size: 1.3rem; letter-spacing: 0.16em; color: var(--ai3-teal-deep); }
