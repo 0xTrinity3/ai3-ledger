@@ -20,7 +20,7 @@ export { THEME_CSS };
 const STYLE_ID = 'ai3-theme';
 
 /** Elements whose exact text marks a duplicate of something ai3.co owns. */
-const HIDE_EXACT = new Set(['Create new organization...', 'Create new organization…', 'Sign out', 'New Organization', 'Create one']);
+const HIDE_EXACT = new Set(['Create new organization...', 'Create new organization…', 'New Organization', 'Create one']);
 const HIDE_PREFIX = ['Paperclip v'];
 
 const RENAME: Array<[RegExp, string]> = [
@@ -73,11 +73,63 @@ function groom(root: ParentNode) {
   // setting reaches. The text nodes on screen are rewritten instead, whole
   // word only, never inside a field, a code sample or the books' own pages.
   renameHost(root);
+  groomAccountMenu(root);
   const title = document.title;
   const renamed = title
     .replace(/^AI3 Ledger • Plugins • /, 'Finance • ')
     .replace(/(\s•\s)?Paperclip$/, (m, sep) => (sep ? `${sep}AI3` : 'AI3'));
   if (renamed !== title) document.title = renamed;
+}
+
+/**
+ * The account menu is Paperclip's, and it is the only one: ai3.co has none of
+ * its own. So it has to reach everything a person needs. Two entries are added
+ * for what only ai3.co holds (its settings page, and invitations), the host's
+ * docs and feedback links point at AI3's, and Sign out ends both sessions —
+ * the tenant's, which the host handles, and ai3.co's, asked for alongside.
+ * Same site, so the request carries ai3.co's cookie.
+ */
+const AI3_ENTRIES: Array<{ key: string; label: string; description: string; href: string; cloneOf: string }> = [
+  { key: 'settings', label: 'Settings on AI3', description: 'Your network profile, what AI3 emails you, and the figure in the nav.', href: `${AI3_ORIGIN}/me/settings`, cloneOf: 'Edit profile' },
+  { key: 'invites', label: 'Invitations', description: 'Invite people to AI3, and see who used yours.', href: `${AI3_ORIGIN}/invites`, cloneOf: 'View profile' },
+];
+const REPOINT: Record<string, string> = { Documentation: `${AI3_ORIGIN}/docs`, Feedback: `${AI3_ORIGIN}/contact` };
+
+function groomAccountMenu(root: ParentNode) {
+  const items = Array.from(root.querySelectorAll('a.rounded-xl.items-start, button.rounded-xl.items-start')) as HTMLElement[];
+  if (!items.length) return;
+  const labelOf = (el: Element) => (el.querySelector('span.block.text-sm')?.textContent || '').trim();
+  const byLabel = new Map(items.map((el) => [labelOf(el), el]));
+  const docs = byLabel.get('Documentation');
+  if (!docs || !docs.parentElement) return;
+  for (const [label, href] of Object.entries(REPOINT)) {
+    const el = byLabel.get(label);
+    if (el instanceof HTMLAnchorElement && el.href !== href) el.href = href;
+  }
+  for (const e of AI3_ENTRIES) {
+    if (docs.parentElement.querySelector(`[data-ai3-menu="${e.key}"]`)) continue;
+    const src = byLabel.get(e.cloneOf) || docs;
+    const node = document.createElement('a');
+    node.className = src.className;
+    node.innerHTML = src.innerHTML;
+    node.href = e.href;
+    node.setAttribute('data-ai3-menu', e.key);
+    node.setAttribute('data-ai3-keep', '1');
+    const l = node.querySelector('span.block.text-sm');
+    const d = node.querySelector('span.block.text-xs');
+    if (l) l.textContent = e.label;
+    if (d) d.textContent = e.description;
+    docs.parentElement.insertBefore(node, docs);
+  }
+  const out = byLabel.get('Sign out');
+  if (out && !out.hasAttribute('data-ai3-out')) {
+    out.setAttribute('data-ai3-out', '1');
+    out.addEventListener('click', () => {
+      try { fetch(`${AI3_ORIGIN}/logout`, { credentials: 'include', mode: 'no-cors', redirect: 'manual', keepalive: true }).catch(() => {}); } catch { /* the host still signs out of the tenant */ }
+    }, { capture: true });
+    const d = out.querySelector('span.block.text-xs');
+    if (d) d.textContent = 'End this session, here and on ai3.co.';
+  }
 }
 
 const HOST_WORD = /\bPaperclip\b/g;
