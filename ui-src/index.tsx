@@ -2533,7 +2533,7 @@ export function LedgerPage(_props: PluginPageProps) {
         {tab === 'bills' && <BillsTab companyId={companyId} company={company.data} />}
         {tab === 'journals' && <JournalsTab companyId={companyId} company={company.data} />}
         {tab === 'import' && <ImportTab companyId={companyId} company={company.data} />}
-        <p className="ai3-note" style={{ marginTop: 28 }}>AI3 Ledger · double-entry, append-only, integer minor units. Costs come from Paperclip; nothing is re-derived.</p>
+        <p className="ai3-note" style={{ marginTop: 28 }}>AI3 Ledger · double-entry, append-only, integer minor units. Costs come from the company's own runs; nothing is re-derived.</p>
       </div>
     </ErrorBoundary>
   );

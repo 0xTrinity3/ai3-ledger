@@ -228,15 +228,15 @@ span.rounded-full.border, span.rounded-full.px-2, span.rounded-full.px-1\.5 { bo
 
 /* The warning bar over the dashboard: a rule with a coloured edge, not a
    yellow box. */
-main div[class*="amber"], main div[class*="yellow"], main div[class*="orange"] {
+div[class*="bg-amber"], div[class*="bg-yellow"], div[class*="border-amber"], div[class*="border-yellow"] {
   background: transparent !important;
   border: 0 !important;
   border-left: 3px solid #d29a1a !important;
   border-radius: 0 !important;
   padding-left: 1rem !important;
 }
-main div[class*="amber"] *, main div[class*="yellow"] * { background: transparent; }
-main div.bg-red-50, main div.border-red-200 { background: transparent !important; border: 0 !important; border-left: 3px solid #b4432c !important; border-radius: 0 !important; }
+div[class*="bg-amber"] > *, div[class*="bg-yellow"] > * { background: transparent; }
+div[class*="bg-red-50"], div[class*="border-red-2"] { background: transparent !important; border: 0 !important; border-left: 3px solid #b4432c !important; border-radius: 0 !important; }
 
 /* Page header: hairline under it, no tint. */
 header.border-b, div.sticky.top-0.border-b { background: var(--background); border-color: var(--ai3-hair); }
