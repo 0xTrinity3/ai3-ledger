@@ -165,6 +165,18 @@ async function sweepCompany(companyId: string): Promise<SweepResult> {
   return sweepCosts(l, paperclipCostSource(l.sql), companyId, { currency: CURRENCY });
 }
 
+const agentNames = new Map<string, string>();
+async function agentLabel(agentId: string, companyId: string): Promise<string> {
+  if (agentNames.has(agentId)) return agentNames.get(agentId)!;
+  let name = agentId;
+  try {
+    const a = await ctx?.agents.get(agentId, companyId);
+    if (a?.name) name = a.name;
+  } catch { /* an agent the host no longer has keeps its id */ }
+  agentNames.set(agentId, name);
+  return name;
+}
+
 const moduleCompanyNames = new Map<string, string>();
 async function companyNameOf(companyId: string): Promise<string> {
   if (ctx && !moduleCompanyNames.has(companyId)) {
@@ -1030,7 +1042,14 @@ const plugin = definePlugin({
         to = `${p.endsOn}T23:59:59.999Z`;
       }
       const now = new Date();
-      return profitAndLoss(ledger(), companyId, { from: from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString(), to: to ?? now.toISOString() }, groupBy);
+      const pnl = await profitAndLoss(ledger(), companyId, { from: from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString(), to: to ?? now.toISOString() }, groupBy);
+      // A group is keyed by the host's id; the screen shows a name. The host
+      // is asked once per id, and an id it no longer knows keeps the id.
+      if (groupBy === 'agent') {
+        const groups = await Promise.all(pnl.groups.map(async (g) => ({ ...g, label: g.key ? await agentLabel(g.key, companyId) : null })));
+        return { ...pnl, groups };
+      }
+      return pnl;
     });
     context.data.register('balance-sheet', async (params) => balanceSheet(ledger(), await companyOf(params), s(params['asOf']) ?? new Date()));
 

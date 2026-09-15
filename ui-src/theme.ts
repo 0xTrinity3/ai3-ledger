@@ -68,11 +68,39 @@ function groom(root: ParentNode) {
   root.querySelectorAll('nav[aria-label="breadcrumb"] span[role="link"], nav[aria-label="breadcrumb"] a').forEach((el) => {
     if (textOf(el) === 'AI3 Ledger') el.textContent = 'Finance';
   });
+  // Paperclip names itself in a few hundred places in its bundle — "Paperclip
+  // could not…", "Paperclip host", the docs entry — and those are literals no
+  // setting reaches. The text nodes on screen are rewritten instead, whole
+  // word only, never inside a field, a code sample or the books' own pages.
+  renameHost(root);
   const title = document.title;
   const renamed = title
     .replace(/^AI3 Ledger • Plugins • /, 'Finance • ')
     .replace(/(\s•\s)?Paperclip$/, (m, sep) => (sep ? `${sep}AI3` : 'AI3'));
   if (renamed !== title) document.title = renamed;
+}
+
+const HOST_WORD = /\bPaperclip\b/g;
+const SKIP = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT', 'CODE', 'PRE', 'KBD', 'SAMP']);
+function renameHost(root: ParentNode) {
+  const walker = document.createTreeWalker(root as Node, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      HOST_WORD.lastIndex = 0;
+      if (!HOST_WORD.test(node.nodeValue || '')) return NodeFilter.FILTER_REJECT;
+      let el: Element | null = node.parentElement;
+      while (el) {
+        if (SKIP.has(el.tagName) || el.classList.contains('ai3') || el.hasAttribute('data-ai3-keep')) return NodeFilter.FILTER_REJECT;
+        el = el.parentElement;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  for (const n of nodes) {
+    HOST_WORD.lastIndex = 0;
+    n.nodeValue = (n.nodeValue || '').replace(HOST_WORD, 'AI3');
+  }
 }
 
 let observing = false;

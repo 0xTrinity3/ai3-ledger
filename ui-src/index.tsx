@@ -238,7 +238,7 @@ interface Period { id: string; label: string; startsOn: string; endsOn: string; 
 interface Pnl {
   from: string; to: string; incomeMinor: string; expenseMinor: string; netMinor: string; groupBy: string | null;
   lines: Array<{ code: string; name: string; type: string; amountMinor: string }>;
-  groups: Array<{ key: string | null; incomeMinor: string; expenseMinor: string; netMinor: string; lines: Array<{ code: string; name: string; type: string; amountMinor: string }> }>;
+  groups: Array<{ key: string | null; label?: string | null; incomeMinor: string; expenseMinor: string; netMinor: string; lines: Array<{ code: string; name: string; type: string; amountMinor: string }> }>;
 }
 interface BsSection { lines: Array<{ code: string; name: string; balanceMinor: string }>; totalMinor: string }
 interface BalanceSheet { asOf: string; assets: BsSection; liabilities: BsSection; equity: BsSection & { retainedEarningsMinor: string }; balances: boolean }
@@ -1544,7 +1544,7 @@ function StatementsTab({ companyId, company }: { companyId: string; company: Com
           <tbody>
             {p.groups.map((g) => (
               <tr className="line" key={g.key ?? 'none'} style={{ fontWeight: 400 }}>
-                <td style={{ paddingLeft: 0 }}>{g.key ? g.key : 'Unattributed'}</td>
+                <td style={{ paddingLeft: 0 }}>{g.key ? (g.label ?? g.key) : 'Unattributed'}</td>
                 <td className="num"><a {...nav.linkProps(entriesLink({ type: 'income', from: range.from, to: range.to, groupBy, groupKey: g.key, label: `Income · ${groupBy} ${g.key ?? 'unattributed'}` }))}>{fmt(g.incomeMinor, { symbol: false })}</a></td>
                 <td className="num"><a {...nav.linkProps(entriesLink({ type: 'expense', from: range.from, to: range.to, groupBy, groupKey: g.key, label: `Expenses · ${groupBy} ${g.key ?? 'unattributed'}` }))}>{fmt(g.expenseMinor, { symbol: false })}</a></td>
                 <td className="num">{fmt(g.netMinor, { symbol: false, paren: true })}</td>
