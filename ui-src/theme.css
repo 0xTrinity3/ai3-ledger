@@ -1,43 +1,59 @@
 /* AI3 inside Paperclip.
    ---------------------------------------------------------------------------
    Paperclip is the working surface for every hosted organisation, and AI3 owns
-   the product. This sheet makes the two one thing: AI3's palette on the host's
-   own tokens, AI3's typography on the chrome, the duplicates that ai3.co
-   already owns taken out of the way, and Finance placed after the work rather
-   than in the middle of it.
+   the product. This sheet makes the two one thing: AI3's palette, type and
+   shape on the host's own tokens and utility classes, the duplicates that
+   ai3.co already owns taken out of the way, and Finance placed after the work
+   rather than in the middle of it.
+
+   The look it reproduces is ai3.co's: white paper, a hairline rule rather than
+   a shadow, square corners, Roboto Slab for reading and numbers, Roboto
+   Condensed capitals with wide tracking for every label, teal for the one
+   thing you can do and for the label of the section you are in.
 
    It is injected into the host document by the ledger plugin on every page in
    the signed-in shell, and linked from the shell's index.html by the box's
    brand step so the sign-in page and the first paint carry it too. It only
-   overrides tokens and hides things: no upstream file is patched. */
+   overrides tokens, utilities and structure it can see: no upstream file is
+   patched. Where a selector leans on one of the host's utility classes it is
+   the class the host has used for a year, and the fallback is Paperclip's own
+   look for that one element, never a broken page. */
 
-@import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400&family=Roboto+Condensed:wght@700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;500&family=Roboto+Condensed:wght@400;700&display=swap');
 
 :root, .light, .light-theme {
   --ai3-teal: #0dc5b9;
   --ai3-teal-deep: #0a9a91;
-  --ai3-teal-soft: #e6f7f5;
-  --ai3-ink: #1c2224;
-  --ai3-paper: #f4f6f6;
+  --ai3-teal-soft: #e5f8f6;
+  --ai3-ink: #222222;
+  --ai3-muted: #50555c;
+  --ai3-faint: #8a9096;
+  --ai3-hair: #e6e8ea;
+  --ai3-paper: #ffffff;
   --ai3-slab: 'Roboto Slab', Georgia, 'Times New Roman', serif;
   --ai3-cond: 'Roboto Condensed', 'Helvetica Neue', Arial, sans-serif;
 
-  --background: #ffffff;
+  --radius: 0.2rem;
+  --font-sans: var(--ai3-slab);
+  --font-body: var(--ai3-slab);
+  --tracking-eyebrow: 0.14em;
+
+  --background: var(--ai3-paper);
   --foreground: var(--ai3-ink);
-  --card: #ffffff;
+  --card: var(--ai3-paper);
   --card-foreground: var(--ai3-ink);
-  --popover: #ffffff;
+  --popover: var(--ai3-paper);
   --popover-foreground: var(--ai3-ink);
-  --primary: var(--ai3-teal-deep);
+  --primary: var(--ai3-teal);
   --primary-foreground: #ffffff;
-  --secondary: #eef2f2;
+  --secondary: #f3f5f6;
   --secondary-foreground: var(--ai3-ink);
-  --muted: #f0f3f3;
-  --muted-foreground: #5d686c;
+  --muted: #f3f5f6;
+  --muted-foreground: var(--ai3-muted);
   --accent: var(--ai3-teal-soft);
   --accent-foreground: #0b3b37;
-  --border: #e3e7e8;
-  --input: #e3e7e8;
+  --border: var(--ai3-hair);
+  --input: var(--ai3-hair);
   --ring: var(--ai3-teal);
   --sidebar: var(--ai3-paper);
   --sidebar-foreground: var(--ai3-ink);
@@ -45,20 +61,24 @@
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: var(--ai3-teal-soft);
   --sidebar-accent-foreground: #0b3b37;
-  --sidebar-border: #e3e7e8;
+  --sidebar-border: var(--ai3-hair);
   --sidebar-ring: var(--ai3-teal);
-  --chart-1: var(--ai3-teal-deep);
+  --chart-1: var(--ai3-teal);
   --chart-2: #2d7ff9;
   --chart-3: #8a6d1f;
   --chart-4: #b4432c;
-  --chart-5: #5d686c;
+  --chart-5: #8a9096;
+  --status-agent-running: var(--ai3-teal-deep);
+  --status-task-in_progress: var(--ai3-teal-deep);
+  --status-task-done: var(--ai3-teal);
 }
 
 .dark, .dark-theme {
   --ai3-teal-soft: rgba(13, 197, 185, 0.14);
+  --ai3-hair: rgba(255, 255, 255, 0.1);
   --background: #121516;
   --foreground: #eef1f1;
-  --card: #181c1d;
+  --card: #121516;
   --card-foreground: #eef1f1;
   --popover: #181c1d;
   --popover-foreground: #eef1f1;
@@ -66,62 +86,198 @@
   --primary-foreground: #08201e;
   --secondary: #21272a;
   --secondary-foreground: #eef1f1;
-  --muted: #21272a;
+  --muted: #1c2123;
   --muted-foreground: #9aa4a8;
   --accent: rgba(13, 197, 185, 0.14);
   --accent-foreground: #d6f7f4;
-  --border: rgba(255, 255, 255, 0.09);
+  --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.13);
   --ring: #0dc5b9;
-  --sidebar: #15191a;
+  --sidebar: #121516;
   --sidebar-foreground: #eef1f1;
   --sidebar-primary: #0dc5b9;
   --sidebar-primary-foreground: #08201e;
   --sidebar-accent: rgba(13, 197, 185, 0.14);
   --sidebar-accent-foreground: #d6f7f4;
-  --sidebar-border: rgba(255, 255, 255, 0.09);
+  --sidebar-border: rgba(255, 255, 255, 0.1);
   --sidebar-ring: #0dc5b9;
   --chart-1: #0dc5b9;
 }
 
-/* The rail is paper, the work is white: the same split as ai3.co's app. */
-aside.bg-background { background: var(--sidebar); }
-.dark aside.bg-background { background: var(--sidebar); }
-aside + div.border-t.bg-background, aside ~ div.border-t.bg-background { background: var(--sidebar); }
+/* ---------------------------------------------------------------------------
+   Type. The host sets Inter on the body; ai3.co reads in a slab. */
+html, body, #root { font-family: var(--ai3-slab); -webkit-font-smoothing: antialiased; }
+body { font-weight: 400; }
+.font-semibold, .font-bold { font-weight: 500; }
+.font-medium { font-weight: 400; }
+.tabular-nums { font-family: var(--ai3-slab); font-variant-numeric: tabular-nums; }
+code, kbd, pre, samp, .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-/* The chrome speaks AI3: condensed capitals for labels, slab for the org. */
+/* Every eyebrow, label and heading in capitals is condensed and spaced, the
+   way ai3.co writes "WHO WORKS HERE". The one the page is about is teal. */
+.uppercase,
 h1.text-sm.font-semibold.uppercase.tracking-wider,
-aside nav span.font-mono.uppercase,
 h3.text-sm.font-semibold.uppercase.tracking-wide,
 .ai3-fin-label span {
   font-family: var(--ai3-cond);
   font-weight: 700;
   letter-spacing: 0.14em;
 }
-aside button[aria-label$="organization switcher"] span.font-bold { font-family: var(--ai3-slab); font-weight: 400; font-size: 0.95rem; }
+h1.text-sm.font-semibold.uppercase.tracking-wider { color: var(--ai3-faint); font-size: 0.78rem; }
+h3.text-sm.font-semibold.uppercase.tracking-wide,
+main div.text-xs.font-medium.uppercase.tracking-wide,
+main p.text-xs.font-semibold.uppercase { color: var(--ai3-teal) !important; font-size: 0.74rem; margin-bottom: 0.9rem; }
 
-/* Primary actions are AI3 teal, and their focus ring too. */
-.bg-primary { background-color: var(--primary) !important; color: var(--primary-foreground) !important; }
-.bg-primary:hover { filter: brightness(0.95); }
+/* Sidebar group labels: WORK, AGENTS, ORGANIZATION. */
+aside nav span.font-mono.uppercase, aside nav div.font-mono.uppercase, aside .font-mono.uppercase {
+  font-family: var(--ai3-cond) !important;
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  color: var(--ai3-faint);
+}
 
-/* Finance renders as a group of the sidebar, not as a boxed plugin panel:
+/* ---------------------------------------------------------------------------
+   Shape. A hairline instead of a shadow, and no rounded tiles. */
+.rounded-xl, .rounded-lg, .rounded-md, .rounded { border-radius: 3px !important; }
+.rounded-2xl { border-radius: 4px !important; }
+.shadow, .shadow-sm, .shadow-md, .shadow-lg, .shadow-xl { box-shadow: none !important; }
+.border-border { border-color: var(--ai3-hair); }
+
+/* The dashboard's figures read like ai3.co's: number in slab at a modest
+   weight, its name in small condensed capitals under it. */
+p.text-2xl.font-semibold.tracking-tight.tabular-nums,
+p.text-3xl.font-semibold.tracking-tight.tabular-nums,
+.sm\:text-3xl.font-semibold.tracking-tight.tabular-nums {
+  font-family: var(--ai3-slab);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+p.text-2xl.font-semibold.tracking-tight.tabular-nums + p,
+p.text-3xl.font-semibold.tracking-tight.tabular-nums + p,
+.sm\:text-3xl.font-semibold.tracking-tight.tabular-nums + p {
+  font-family: var(--ai3-cond);
+  font-weight: 700;
+  font-size: 0.7rem !important;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ai3-faint);
+}
+
+/* ---------------------------------------------------------------------------
+   The rail. White, one hairline, and the entries in condensed capitals: the
+   same voice as the section bar on ai3.co. */
+aside.bg-background, aside { background: var(--sidebar); }
+.dark aside.bg-background { background: var(--sidebar); }
+aside + div.border-t.bg-background, aside ~ div.border-t.bg-background { background: var(--sidebar); }
+aside nav a, aside nav button[data-slot="icon-button"] {
+  font-family: var(--ai3-cond);
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ai3-muted);
+  border-radius: 3px;
+}
+aside nav a:hover, aside nav button[data-slot="icon-button"]:hover { color: var(--ai3-ink); background: var(--ai3-teal-soft); }
+aside nav a[aria-current="page"], aside nav a.bg-accent, aside nav a[data-active="true"], aside nav a[data-state="active"] {
+  color: var(--ai3-teal-deep);
+  background: var(--ai3-teal-soft);
+}
+aside nav a svg, aside nav button[data-slot="icon-button"] svg { opacity: 0.7; stroke-width: 1.75; }
+aside nav a .truncate, aside nav button .truncate { letter-spacing: inherit; }
+.dark aside nav a { color: #b8c2c5; }
+.dark aside nav a:hover { color: #eef1f1; }
+
+/* The organisation in the rail: its name in slab, its mark in teal. */
+aside button[aria-label$="organization switcher"] span.font-bold,
+aside button[aria-label$="organization switcher"] span.font-semibold { font-family: var(--ai3-slab); font-weight: 400; font-size: 1rem; letter-spacing: 0; }
+aside button[aria-label$="organization switcher"] > :first-child,
+aside button[aria-label$="organization switcher"] > span:first-child > :first-child {
+  background: var(--ai3-teal) !important;
+  color: #ffffff !important;
+  border-radius: 3px !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons speak the way ai3.co's do: condensed capitals, teal when primary. */
+button.bg-primary, a.bg-primary, .bg-primary { background-color: var(--primary) !important; color: var(--primary-foreground) !important; }
+.bg-primary:hover { background-color: var(--ai3-teal-deep) !important; filter: none; }
+button.inline-flex.items-center.justify-center, a.inline-flex.items-center.justify-center.rounded-md, a.inline-flex.items-center.justify-center.rounded-lg {
+  font-family: var(--ai3-cond);
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 3px;
+}
+button.inline-flex.items-center.justify-center.border, a.inline-flex.items-center.justify-center.border { border-color: var(--ai3-ink); color: var(--ai3-ink); background: transparent; }
+button.inline-flex.items-center.justify-center.border:hover { border-color: var(--ai3-teal-deep); color: var(--ai3-teal-deep); background: var(--ai3-teal-soft); }
+button.text-red-900, button.text-destructive, .text-destructive { color: #b4432c; }
+
+/* Links are the deep teal ai3.co uses. */
+main a:not(.no-underline):not([class*="text-"]):not(.ai3-side) { color: var(--ai3-teal-deep); }
+a.underline { text-decoration-color: color-mix(in oklab, var(--ai3-teal-deep) 50%, transparent); }
+
+/* Inputs: ai3.co's square field with a teal focus. */
+input, textarea, select { font-family: var(--ai3-slab); border-radius: 3px !important; }
+input:focus-visible, textarea:focus-visible, select:focus-visible, [contenteditable]:focus-visible { outline: none; border-color: var(--ai3-teal) !important; box-shadow: 0 0 0 3px var(--ai3-teal-soft) !important; }
+
+/* Pills and chips: no capsule, one hairline, condensed capitals. */
+span.rounded-full.border, span.rounded-full.px-2, span.rounded-full.px-1\.5 { border-radius: 3px !important; font-family: var(--ai3-cond); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* The warning bar over the dashboard: a rule with a coloured edge, not a
+   yellow box. */
+main div.border-amber-200, main div.border-amber-300, main div.bg-amber-50, main div.border-yellow-200 {
+  background: transparent !important;
+  border: 0 !important;
+  border-left: 3px solid #d29a1a !important;
+  border-radius: 0 !important;
+  padding-left: 1rem !important;
+}
+main div.bg-red-50, main div.border-red-200 { background: transparent !important; border: 0 !important; border-left: 3px solid #b4432c !important; border-radius: 0 !important; }
+
+/* Page header: hairline under it, no tint. */
+header.border-b, div.sticky.top-0.border-b { background: var(--background); border-color: var(--ai3-hair); }
+.border-primary\/20 { border-color: var(--ai3-hair) !important; }
+
+/* Tables read like ai3.co's: condensed capitals in the head, slab in the body. */
+thead th { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ai3-faint); }
+tbody td { font-family: var(--ai3-slab); }
+
+/* Tabs: the underline is teal. */
+[role="tablist"] [role="tab"] { font-family: var(--ai3-cond); font-weight: 700; font-size: 0.74rem; letter-spacing: 0.12em; text-transform: uppercase; border-radius: 3px; }
+[role="tablist"] [role="tab"][data-state="active"] { color: var(--ai3-teal-deep); box-shadow: inset 0 -2px 0 var(--ai3-teal); background: transparent; }
+
+/* Dialogs, popovers, menus: the same square hairline. */
+[role="dialog"], [role="menu"], [data-radix-popper-content-wrapper] > div, [data-slot="popover-content"] { border-radius: 3px !important; box-shadow: 0 8px 30px rgba(34, 34, 34, 0.08) !important; border: 1px solid var(--ai3-hair) !important; }
+[role="menuitem"] { font-family: var(--ai3-slab); border-radius: 3px; }
+
+/* ---------------------------------------------------------------------------
+   Finance renders as a group of the sidebar, not as a boxed plugin panel:
    the host wraps a sidebarPanel slot in a border, and this takes it away. */
 aside nav div:has(> div > .ai3-fin), aside nav div:has(> .ai3-fin) { border: 0 !important; padding: 0 !important; border-radius: 0 !important; }
 .ai3-fin { display: flex; flex-direction: column; gap: 2px; }
 .ai3-fin-label { padding: 6px 12px; display: flex; align-items: center; gap: 4px; min-height: 24px; }
-.ai3-fin-label span { font-size: var(--text-nano, 0.66rem); text-transform: uppercase; color: color-mix(in oklab, var(--muted-foreground) 70%, transparent); }
-.ai3-fin-label button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: 0; background: none; color: var(--muted-foreground); cursor: pointer; border-radius: 6px; margin-left: -4px; }
-.ai3-fin-label button:hover { background: color-mix(in oklab, var(--accent) 60%, transparent); }
+.ai3-fin-label span { font-size: 0.68rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ai3-faint); }
+.ai3-fin-label button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: 0; background: none; color: var(--muted-foreground); cursor: pointer; border-radius: 3px; margin-left: -4px; }
+.ai3-fin-label button:hover { background: var(--ai3-teal-soft); }
 .ai3-fin-label button svg { width: 14px; height: 14px; transition: transform 120ms; }
 .ai3-fin[data-collapsed="1"] .ai3-fin-label button svg { transform: rotate(-90deg); }
 .ai3-fin[data-collapsed="1"] .ai3-fin-links { display: none; }
 .ai3-fin-links { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
-.ai3-fin a.ai3-side { display: flex; align-items: center; gap: 10px; margin: 0 8px; padding: 6px 8px; border-radius: 8px; color: color-mix(in oklab, var(--foreground) 80%, transparent); font-size: var(--text-compact, 0.8125rem); font-weight: 500; text-decoration: none; transition: background-color 120ms, color 120ms; }
-.ai3-fin a.ai3-side:hover { background: color-mix(in oklab, var(--accent) 50%, transparent); color: var(--foreground); text-decoration: none; }
-.ai3-fin a.ai3-side.on { background: var(--accent); color: var(--foreground); }
-.ai3-fin a.ai3-side svg { width: 16px; height: 16px; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ai3-fin a.ai3-side {
+  display: flex; align-items: center; gap: 10px; margin: 0 8px; padding: 6px 8px; border-radius: 3px;
+  color: var(--ai3-muted);
+  font-family: var(--ai3-cond); font-weight: 700; font-size: 0.74rem; letter-spacing: 0.1em; text-transform: uppercase;
+  text-decoration: none; transition: background-color 120ms, color 120ms;
+}
+.ai3-fin a.ai3-side:hover { background: var(--ai3-teal-soft); color: var(--ai3-ink); text-decoration: none; }
+.ai3-fin a.ai3-side.on { background: var(--ai3-teal-soft); color: var(--ai3-teal-deep); }
+.ai3-fin a.ai3-side svg { width: 16px; height: 16px; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; opacity: 0.7; }
 .ai3-fin a.ai3-side .ext { margin-left: auto; font-size: 0.7em; opacity: 0.6; }
 .ai3-fin .ai3-fin-ai3 { margin-top: 6px; }
+.dark .ai3-fin a.ai3-side { color: #b8c2c5; }
 
 /* Plugin management is the operator's: the settings entry goes, the API stays. */
 a[href$="/company/settings/instance/plugins"] { display: none !important; }
