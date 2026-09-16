@@ -119,7 +119,18 @@ export async function billingOpen(fetch: FetchLike, settings: CompanySettings, c
  */
 export async function raiseOne(deps: ToolDeps, companyId: string, settings: CompanySettings, item: DueItem): Promise<{ inv: Invoice; created: boolean }> {
   const existing = await invoiceForRef(deps.db, companyId, item.ref);
-  if (existing) return { inv: existing, created: false };
+  if (existing) {
+    // A draft is a run that failed between create and issue (the first stamped
+    // organisation had no chart to post to). Issue and publish it now rather
+    // than report it as done with no page anybody can pay.
+    if (existing.status === 'draft') {
+      let inv = await issueInvoice(deps.db, companyId, existing.id, { createdBy: 'market' });
+      inv = await connectedPublish(deps, inv);
+      return { inv, created: false };
+    }
+    if (!existing.hosted && existing.status !== 'void') return { inv: await connectedPublish(deps, existing), created: false };
+    return { inv: existing, created: false };
+  }
   const customerId = await customerFor(deps.db, companyId, item.buyer.name, item.buyer.email);
   let inv = await createInvoice(deps.db, companyId, {
     customerId,
