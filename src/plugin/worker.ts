@@ -1244,6 +1244,10 @@ const plugin = definePlugin({
       for (const company of companies) {
         if (!(await jobAllowed(company.id, httpFetch, 'market'))) continue;
         try {
+          // A company whose sweep has never run has no chart yet, and an
+          // invoice posts to Receivables and Revenue: the first market run
+          // for DevOps Desk failed with "unknown account code" for that.
+          await seedAccounts(ledger(), company.id, CURRENCY);
           const { companyId: _drop, ...deps } = marketDeps(company.id);
           const r = await runMarket(deps, company.id);
           invoiced += r.invoiced.length;
