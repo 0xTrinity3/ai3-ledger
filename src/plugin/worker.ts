@@ -337,6 +337,9 @@ function who(input: PluginApiRequestInput): string {
   return input.actor.actorType === 'agent' ? `agent:${input.actor.agentId ?? input.actor.actorId}` : input.actor.userId ?? 'board';
 }
 
+/** Set once the plugin is up: publishes an invoice's hosted page on ai3.co when the company is connected. */
+let publishHosted: ((companyId: string, invoiceId: string) => Promise<unknown>) | null = null;
+
 async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, companyId: string): Promise<PluginApiResponse> {
   const board = input.actor.actorType === 'user';
   const body = bodyOf(input);
@@ -407,7 +410,17 @@ async function handleInvoicing(input: PluginApiRequestInput, l: LedgerDb, compan
           ...(typeof body['issuedAt'] === 'string' ? { issuedAt: body['issuedAt'] } : {}),
           createdBy: who(input),
         });
-        return json(200, inv);
+        // As the UI action does: a connected company gets its hosted page the moment the invoice is issued.
+        try { if (publishHosted && !inv.hosted) await publishHosted(companyId, inv.id); } catch { /* not connected, or ai3.co unreachable: the invoice stands */ }
+        return json(200, (await getInvoice(l, companyId, inv.id)) ?? inv);
+      }
+      case 'invoices.publish': {
+        if (!board) return bad('Only the board can publish an invoice', 403);
+        const inv = await getInvoice(l, companyId, id);
+        if (!inv) return bad('Invoice not found', 404);
+        if (!publishHosted) return bad('Hosted pages are not available on this instance', 503);
+        try { if (!inv.hosted) await publishHosted(companyId, id); } catch (err) { return bad(err instanceof Error ? err.message : String(err), 409); }
+        return json(200, (await getInvoice(l, companyId, id)) ?? inv);
       }
       case 'invoices.payment': {
         if (!board) return bad('Only the board can record a payment', 403);
@@ -1295,6 +1308,7 @@ const plugin = definePlugin({
       await setInvoiceHosted(ledger(), companyId, invoiceId, r);
       return { ...r, settings };
     };
+    publishHosted = publish;
     context.actions.register('invoice.publish', async (params, ctx) => {
       boardOnly(ctx);
       const companyId = await companyOf(params);
