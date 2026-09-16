@@ -99,7 +99,7 @@ export { getWallet, saveWallet, getChainCursor, setChainCursor, createDispute, u
 export { findTransactionBySourceRef } from './ledger.js';
 
 export type { Supplier, Bill, BillLine, BillLineInput, BillPayment, BillStatus, CreateBillInput } from './bills.js';
-export { createSupplier, updateSupplier, getSupplier, listSuppliers, resolveSupplier, createBill, updateBill, getBill, findBillByNumber, listBills, approveBill, payBill, voidBill, deleteBill, payablesOutstanding } from './bills.js';
+export { createSupplier, updateSupplier, getSupplier, listSuppliers, resolveSupplier, createBill, updateBill, getBill, findBillByNumber, openBillForReference, listBills, approveBill, payBill, voidBill, deleteBill, payablesOutstanding } from './bills.js';
 export type { DocumentMeta, DocumentTarget } from './documents.js';
 export { DOCUMENT_MAX_BYTES, addDocument, linkDocument, unlinkDocument, getDocument, readDocument, listDocumentsFor, documentCounts } from './documents.js';
 

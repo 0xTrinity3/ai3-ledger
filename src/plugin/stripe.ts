@@ -31,6 +31,8 @@ import {
   type StripeLink,
   resolveCode,
 
+  openBillForReference,
+  payBill,
 } from '../core/index.js';
 import { ai3Call, isConnected, type FetchLike } from './ai3.js';
 
@@ -197,10 +199,16 @@ export async function payInvoiceByCard(db: LedgerDb, fetch: FetchLike, settings:
   // back to the caller and put on the record.
   const code = await resolveCode(db, companyId, input.accountCode ?? ACCOUNT.OTHER_OPERATING);
   const bank = await ensureCardAccount(db, companyId, r.currency);
-  await postTransaction(db, {
-    companyId, occurredAt: new Date(r.at || Date.now()), description: input.description ?? `Invoice ${r.invoiceNumber} from ${r.seller} · card`,
-    sourcePlatform: 'stripe', sourceKind: 'payment', sourceRef: `stripe:${r.paymentIntentId}`, currency: r.currency,
-    entries: [{ accountCode: code, direction: 'debit', amountMinor: amount }, { accountCode: bank.accountCode, direction: 'credit', amountMinor: amount }], createdBy: input.by,
-  });
+  // A bill the marketplace wrote for this invoice is what the card just paid.
+  const bill = r.invoiceNumber ? await openBillForReference(db, companyId, r.invoiceNumber) : null;
+  if (bill) {
+    await payBill(db, companyId, bill.id, { amountMinor: amount, occurredAt: new Date(r.at || Date.now()), reference: `stripe:${r.paymentIntentId}`, createdBy: input.by, cashAccountCode: bank.accountCode });
+  } else {
+    await postTransaction(db, {
+      companyId, occurredAt: new Date(r.at || Date.now()), description: input.description ?? `Invoice ${r.invoiceNumber} from ${r.seller} · card`,
+      sourcePlatform: 'stripe', sourceKind: 'payment', sourceRef: `stripe:${r.paymentIntentId}`, currency: r.currency,
+      entries: [{ accountCode: code, direction: 'debit', amountMinor: amount }, { accountCode: bank.accountCode, direction: 'credit', amountMinor: amount }], createdBy: input.by,
+    });
+  }
   return { paymentIntentId: r.paymentIntentId, amountMinor: amount, currency: r.currency, invoiceNumber: r.invoiceNumber, seller: r.seller, feeMinor: r.feeMinor, at: r.at, card: r.card, accountCode: code };
 }

@@ -412,6 +412,22 @@ export async function getBill(db: LedgerDb, companyId: string, id: string): Prom
   return fromRow(r, lines.get(id) ?? [], payments.get(id) ?? []);
 }
 
+/**
+ * The open bill that carries a supplier's invoice number as its reference: the
+ * marketplace writes the seller's number there so both sets of books name the
+ * same document, and a payment of that invoice settles this bill rather than
+ * booking a second expense beside it.
+ */
+export async function openBillForReference(db: LedgerDb, companyId: string, reference: string): Promise<Bill | null> {
+  const ref = String(reference ?? '').trim();
+  if (!ref) return null;
+  const rows = await db.sql.query<BillRow>(
+    `${SELECT(db)} WHERE b.company_id = $1 AND b.reference = $2 AND b.status IN ('approved', 'part_paid') ORDER BY COALESCE(b.issued_at, b.created_at) DESC LIMIT 1`,
+    [companyId, ref.slice(0, 100)],
+  );
+  return rows[0] ? fromRow(rows[0], [], []) : null;
+}
+
 export async function findBillByNumber(db: LedgerDb, companyId: string, number: string): Promise<Bill | null> {
   const rows = await db.sql.query<BillRow>(`${SELECT(db)} WHERE b.company_id = $1 AND upper(b.number) = upper($2)`, [companyId, number.trim()]);
   const r = rows[0];

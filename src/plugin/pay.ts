@@ -24,6 +24,7 @@ import {
   getConnectedWallet,
   importStatementLines,
   listConnectedWallets,
+  openBillForReference,
   payBill,
   postTransaction,
   readConnectedCredentials,
@@ -247,9 +248,14 @@ export async function payFromCompanyWallet(db: LedgerDb, fetch: FetchLike, compa
   if (!to) throw new LedgerError('give an invoice link or a payee address', 'invalid');
   if (amountCents === null) throw new LedgerError('give an amount', 'invalid');
   if (!memo) memo = description?.slice(0, 32) ?? 'payment';
+  // The marketplace may already have written this invoice into our books as a
+  // bill. Paying it settles that bill; booking an expense beside it counted
+  // the first cross-organisation payment twice.
+  let billId = input.billId ?? null;
+  if (!billId && remote?.number) billId = (await openBillForReference(db, companyId, remote.number))?.id ?? null;
   const result = await tempoPay(wallet, { to, amountCents, memo });
   const bank = wallet.bankAccountId ? await getBankAccount(db, companyId, wallet.bankAccountId) : null;
-  const booked = await bookOutgoing(db, companyId, { chain: tempo, txHash: result.txHash, bankAccountCode: bank?.accountCode ?? null, amountMinor: amountCents, description: description ?? `Paid ${to} · ${memo}`, accountCode: input.accountCode ?? null, billId: input.billId ?? null }, by);
+  const booked = await bookOutgoing(db, companyId, { chain: tempo, txHash: result.txHash, bankAccountCode: bank?.accountCode ?? null, amountMinor: amountCents, description: description ?? `Paid ${to} · ${memo}`, accountCode: input.accountCode ?? null, billId }, by);
   return { txHash: result.txHash, explorer: result.explorer, to, amountMinor: amountCents.toString(), asset: PATH_USD_SYMBOL, memo, invoice: remote?.number ?? null, booked };
 }
 
