@@ -9,6 +9,7 @@
  */
 import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
 import { registerModel } from './model.js';
+import { registerOrg } from './org.js';
 import type { PluginApiRequestInput, PluginApiResponse, PluginContext } from '@paperclipai/plugin-sdk';
 import {
   ACCOUNT,
@@ -1196,6 +1197,8 @@ const plugin = definePlugin({
     });
     // Settings › Model: the organisation's default model, relayed to ai3.co.
     registerModel(context, { fetch: httpFetch, companyOf, settingsOf: (companyId) => getSettings(ledger(), companyId, CURRENCY), boardOnly });
+    // Settings › AI3: the organisation's directory profile, visibility, joining and listing, relayed to ai3.co.
+    registerOrg(context, { fetch: httpFetch, companyOf, settingsOf: (companyId) => getSettings(ledger(), companyId, CURRENCY), boardOnly });
     // Push this company's figures to ai3.co now (the daily job does the same for every company).
     const issuesFor = async (companyId: string): Promise<IssueLike[] | null> => {
       try {

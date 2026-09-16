@@ -27,7 +27,14 @@ const RENAME: Array<[RegExp, string]> = [
   [/^Sign in to Paperclip$/, 'Sign in to AI3'],
   [/^Use your email and password to access this instance\.$/, 'AI3 signs you in from ai3.co. Open your organisation there and you arrive here signed in.'],
   [/^Create your Paperclip account$/, 'Accounts are made at ai3.co'],
+  // Paperclip's Danger Zone archives; on AI3 the provisioner treats an archived
+  // company as deleted, everywhere, within minutes. Say so.
+  [/^Archive this organization to hide it from the sidebar\. This persists in the database\.$/, 'Delete this organization permanently: its agents, tasks and comments here, its record and listings on ai3.co, its code repositories on GitHub and its databases. Books, verdicts and invoices stay on record for the organizations it traded with. This cannot be undone.'],
 ];
+
+/** Paperclip's archive button and its confirm, reworded to what happens on AI3. */
+const ARCHIVE_BUTTON = /^Archive organization$/;
+const ARCHIVE_CONFIRM = /^Archive organization "(.+)"\? It will be hidden from the sidebar\.$/;
 
 function textOf(el: Element): string {
   return (el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -43,6 +50,7 @@ function groom(root: ParentNode) {
   root.querySelectorAll('[role="menuitem"], button').forEach((el) => {
     const t = textOf(el);
     if (HIDE_EXACT.has(t)) mark(el);
+    if (ARCHIVE_BUTTON.test(t)) el.textContent = 'Delete organization permanently';
   });
   // The version line under the account menu, and the "Need an account?" line on sign-in.
   root.querySelectorAll('p, div.mt-5').forEach((el) => {
@@ -214,6 +222,28 @@ function renameHost(root: ParentNode) {
 let observing = false;
 
 /** Put the theme in the document once, and keep grooming as the host re-renders. */
+/**
+ * Paperclip confirms an archive with one yes/no. On AI3 that click deletes the
+ * organization for good, so the question says so and asks for the name typed
+ * back. Every other confirm is left alone.
+ */
+let guarded = false;
+function guardArchive(win: (Window & typeof globalThis) | null) {
+  if (!win || guarded) return;
+  guarded = true;
+  const original = win.confirm.bind(win);
+  win.confirm = (message?: string): boolean => {
+    const m = ARCHIVE_CONFIRM.exec(String(message ?? ''));
+    if (!m) return original(message);
+    const name = m[1] ?? '';
+    const typed = win.prompt(
+      `Delete "${name}" permanently?\n\nThis removes the organization from AI3, deletes its agents, tasks and comments here, deletes its code repositories on GitHub and drops its databases. Books, verdicts and invoices stay on record for the organizations it traded with.\n\nThis cannot be undone. Type the organization's name to confirm.`,
+      '',
+    );
+    return typed !== null && typed.trim() === name.trim();
+  };
+}
+
 export function installTheme(doc: Document = document) {
   if (!doc.getElementById(STYLE_ID)) {
     const el = doc.createElement('style');
@@ -222,6 +252,7 @@ export function installTheme(doc: Document = document) {
     doc.head.appendChild(el);
   }
   groom(doc);
+  guardArchive(doc.defaultView);
   if (observing) return;
   observing = true;
   let scheduled = false;

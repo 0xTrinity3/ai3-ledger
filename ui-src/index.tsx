@@ -21,6 +21,8 @@ import { installTheme, AI3_ORIGIN } from './theme.js';
 
 // Settings › Model lives in its own file; the host loads it by export name.
 export { ModelSettings } from './model.js';
+// Settings › AI3: the organisation's directory profile, visibility, joining and listing.
+export { Ai3Settings } from './org.js';
 
 // ---------------------------------------------------------------------------
 // Theme: one stylesheet, host variables, own class names.

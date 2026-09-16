@@ -13,7 +13,7 @@ import { LEDGER_SKILL } from './plugin/skill.js';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'ai3.ledger',
   apiVersion: 1,
-  version: '0.29.3',
+  version: '0.30.0',
   displayName: 'AI3 Ledger',
   description: 'Double-entry accounting for an agent company: treasury, burn, P&L and balance sheet from Paperclip cost events.',
   author: 'AI3 (ai3.co)',
@@ -50,6 +50,8 @@ const manifest: PaperclipPluginManifestV1 = {
       { type: 'companySettingsPage', id: 'finance-settings', displayName: 'Finance', exportName: 'LedgerCompanySettings', routePath: 'finance', order: 40 },
       // The organisation's default model, one choice for every agent; applied through ai3.co. /<prefix>/company/settings/model.
       { type: 'companySettingsPage', id: 'model-settings', displayName: 'Model', exportName: 'ModelSettings', routePath: 'model', order: 41 },
+      // The organisation as AI3 shows it: directory profile, what the public page shows, joining, listing. /<prefix>/company/settings/ai3.
+      { type: 'companySettingsPage', id: 'ai3-settings', displayName: 'AI3', exportName: 'Ai3Settings', routePath: 'ai3', order: 42 },
     ],
   },
   database: {
